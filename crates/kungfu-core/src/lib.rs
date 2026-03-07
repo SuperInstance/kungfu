@@ -206,6 +206,10 @@ impl KungfuService {
         self.search().search_text(query, budget)
     }
 
+    pub fn find_related(&self, file_path: &str, budget: Budget) -> Result<Vec<SearchResult<FileEntry>>> {
+        self.search().find_related(file_path, budget)
+    }
+
     pub fn context(&self, query: &str, budget: Budget) -> Result<ContextPacket> {
         let search = self.search();
 

@@ -96,6 +96,9 @@ enum Commands {
     Related {
         /// File path
         path: String,
+
+        #[arg(long, default_value = "medium")]
+        budget: String,
     },
 
     /// Build minimal context packet for a query
@@ -160,7 +163,9 @@ fn main() {
         Commands::SearchText { query, budget } => {
             commands::search_text(&query, parse_budget(&budget), json)
         }
-        Commands::Related { path } => commands::related(&path, json),
+        Commands::Related { path, budget } => {
+            commands::related(&path, parse_budget(&budget), json)
+        }
         Commands::Context { query, budget } => {
             commands::context(&query, parse_budget(&budget), json)
         }

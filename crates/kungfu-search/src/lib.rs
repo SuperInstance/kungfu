@@ -133,6 +133,121 @@ impl SearchEngine {
         self.store.load_symbols()
     }
 
+    /// Find files related to the given file by directory proximity, shared symbols, and naming patterns.
+    pub fn find_related(&self, file_path: &str, budget: Budget) -> Result<Vec<SearchResult<FileEntry>>> {
+        let files = self.store.load_files()?;
+        let symbols = self.store.load_symbols()?;
+        let top_k = budget.top_k();
+
+        // Normalize: find the file in the index
+        let target = files
+            .iter()
+            .find(|f| f.path == file_path || f.path.ends_with(file_path) || file_path.ends_with(&f.path));
+
+        let target = match target {
+            Some(t) => t.clone(),
+            None => return Ok(Vec::new()),
+        };
+
+        let target_path = &target.path;
+
+        // Collect symbol names from the target file
+        let target_symbols: std::collections::HashSet<String> = symbols
+            .iter()
+            .filter(|s| s.file_id == target.id)
+            .map(|s| s.name.to_lowercase())
+            .collect();
+
+        // Path components for proximity scoring
+        let target_parts: Vec<&str> = target_path.split('/').collect();
+        let target_dir = target_parts[..target_parts.len().saturating_sub(1)].join("/");
+        let target_stem = std::path::Path::new(target_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // Build symbol sets per file for cross-referencing
+        let mut file_symbols: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        for sym in &symbols {
+            file_symbols
+                .entry(sym.file_id.clone())
+                .or_default()
+                .insert(sym.name.to_lowercase());
+        }
+
+        let mut results: Vec<SearchResult<FileEntry>> = files
+            .iter()
+            .filter(|f| f.path != target.path)
+            .filter_map(|f| {
+                let mut score = 0.0_f64;
+
+                let f_parts: Vec<&str> = f.path.split('/').collect();
+                let f_dir = f_parts[..f_parts.len().saturating_sub(1)].join("/");
+                let f_stem = std::path::Path::new(&f.path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                // 1. Same directory = strong signal
+                if f_dir == target_dir && !target_dir.is_empty() {
+                    score += 0.5;
+                }
+
+                // 2. Shared parent directory
+                let shared_depth = target_parts
+                    .iter()
+                    .zip(f_parts.iter())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                if shared_depth > 0 {
+                    let depth_score = shared_depth as f64 / target_parts.len().max(1) as f64;
+                    score += depth_score * 0.3;
+                }
+
+                // 3. Shared symbol names (likely imports/usage)
+                if let Some(f_syms) = file_symbols.get(&f.id) {
+                    let shared = target_symbols.intersection(f_syms).count();
+                    if shared > 0 {
+                        let sym_score = (shared as f64 / target_symbols.len().max(1) as f64).min(1.0);
+                        score += sym_score * 0.4;
+                    }
+                }
+
+                // 4. Test file pattern (foo.ts <-> foo.test.ts, foo_test.go)
+                if f_stem.contains(&target_stem) || target_stem.contains(&f_stem) {
+                    if f.path.contains("test") || f.path.contains("spec") {
+                        score += 0.3;
+                    } else if target_path.contains("test") || target_path.contains("spec") {
+                        score += 0.3;
+                    } else {
+                        score += 0.1;
+                    }
+                }
+
+                // 5. Same language bonus
+                if f.language == target.language {
+                    score += 0.05;
+                }
+
+                if score > 0.05 {
+                    Some(SearchResult {
+                        item: f.clone(),
+                        score,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(top_k);
+        Ok(results)
+    }
+
     pub fn get_symbols_for_file(&self, file_path: &str) -> Result<Vec<Symbol>> {
         let symbols = self.store.load_symbols()?;
         let files = self.store.load_files()?;

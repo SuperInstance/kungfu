@@ -217,7 +217,7 @@ impl KungfuMcp {
         serde_json::to_string_pretty(&items).map_err(|e| e.to_string())
     }
 
-    #[tool(description = "Find files related to the given file by import graph, test proximity, and path heuristics")]
+    #[tool(description = "Find files related to the given file by directory proximity, shared symbols, test patterns, and path heuristics")]
     fn find_related_files(
         &self,
         Parameters(params): Parameters<FilePathBudgetParam>,
@@ -225,13 +225,18 @@ impl KungfuMcp {
         let budget = parse_budget(params.budget.as_deref());
         let service = self.service()?;
         let results = service
-            .search_text(&params.path, budget)
+            .find_related(&params.path, budget)
             .map_err(|e| e.to_string())?;
 
         let items: Vec<_> = results
             .iter()
-            .filter(|r| r.item.path != params.path)
-            .map(|r| serde_json::json!({"path": r.item.path, "score": r.score}))
+            .map(|r| {
+                serde_json::json!({
+                    "path": r.item.path,
+                    "language": r.item.language,
+                    "score": r.score,
+                })
+            })
             .collect();
 
         serde_json::to_string_pretty(&items).map_err(|e| e.to_string())

@@ -520,25 +520,34 @@ pub fn search_text(query: &str, budget: Budget, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn related(path: &str, json: bool) -> Result<()> {
+pub fn related(path: &str, budget: Budget, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
-    let results = service.search_text(path, Budget::Medium)?;
+    let results = service.find_related(path, budget)?;
 
     if json {
         let items: Vec<_> = results
             .iter()
-            .filter(|r| r.item.path != path)
-            .map(|r| serde_json::json!({"path": r.item.path, "score": r.score}))
+            .map(|r| {
+                serde_json::json!({
+                    "path": r.item.path,
+                    "language": r.item.language,
+                    "score": r.score,
+                })
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&items)?);
     } else {
-        let filtered: Vec<_> = results.iter().filter(|r| r.item.path != path).collect();
-        if filtered.is_empty() {
+        if results.is_empty() {
             println!("No related files found for '{}'", path);
         } else {
-            for r in filtered {
-                println!("  {:.2}  {}", r.score, r.item.path);
+            for r in &results {
+                println!(
+                    "  {:.2}  {} ({})",
+                    r.score,
+                    r.item.path,
+                    r.item.language.as_deref().unwrap_or("?")
+                );
             }
         }
     }
