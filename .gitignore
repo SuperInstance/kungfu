@@ -1,0 +1,32 @@
+# Build
+/target
+/dist
+/tmp
+
+# Kungfu project state
+.kungfu
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode
+.idea
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+
+# Tmp
+/tmp
+
+# AI
+.claude
+
+# tsk
+.tsk

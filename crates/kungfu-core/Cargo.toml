@@ -1,0 +1,18 @@
+[package]
+name = "kungfu-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+kungfu-types = { workspace = true }
+kungfu-config = { workspace = true }
+kungfu-project = { workspace = true }
+kungfu-index = { workspace = true }
+kungfu-storage = { workspace = true }
+kungfu-search = { workspace = true }
+kungfu-rank = { workspace = true }
+kungfu-git = { workspace = true }

@@ -1,0 +1,65 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kungfu-cli",
+    "crates/kungfu-core",
+    "crates/kungfu-config",
+    "crates/kungfu-project",
+    "crates/kungfu-types",
+    "crates/kungfu-index",
+    "crates/kungfu-parse",
+    "crates/kungfu-search",
+    "crates/kungfu-rank",
+    "crates/kungfu-storage",
+    "crates/kungfu-git",
+    "crates/kungfu-output",
+    "crates/kungfu-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Filesystem
+walkdir = "2"
+ignore = "0.4"
+blake3 = "1"
+notify = "7"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Internal crates
+kungfu-types = { path = "crates/kungfu-types" }
+kungfu-config = { path = "crates/kungfu-config" }
+kungfu-project = { path = "crates/kungfu-project" }
+kungfu-core = { path = "crates/kungfu-core" }
+kungfu-index = { path = "crates/kungfu-index" }
+kungfu-parse = { path = "crates/kungfu-parse" }
+kungfu-search = { path = "crates/kungfu-search" }
+kungfu-rank = { path = "crates/kungfu-rank" }
+kungfu-storage = { path = "crates/kungfu-storage" }
+kungfu-git = { path = "crates/kungfu-git" }
+kungfu-output = { path = "crates/kungfu-output" }
+kungfu-mcp = { path = "crates/kungfu-mcp" }

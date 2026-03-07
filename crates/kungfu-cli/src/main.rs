@@ -1,0 +1,182 @@
+mod commands;
+
+use clap::{Parser, Subcommand};
+use kungfu_types::Budget;
+use tracing_subscriber::EnvFilter;
+
+#[derive(Parser)]
+#[command(name = "kungfu", version, about = "Context retrieval and distillation engine for coding agents")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+
+    /// Output as JSON
+    #[arg(long, global = true)]
+    json: bool,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Initialize kungfu in the current project
+    Init,
+
+    /// Show project status and index health
+    Status,
+
+    /// Validate installation, config, and index integrity
+    Doctor,
+
+    /// Show current configuration
+    #[command(name = "config")]
+    ConfigShow {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+
+    /// Build or update the project index
+    Index {
+        /// Force full rebuild
+        #[arg(long)]
+        full: bool,
+
+        /// Index only changed files
+        #[arg(long)]
+        changed: bool,
+    },
+
+    /// Remove caches and indexes
+    Clean,
+
+    /// Show compact repo structure
+    #[command(name = "repo-outline")]
+    RepoOutline {
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Show file structure and symbols
+    #[command(name = "file-outline")]
+    FileOutline {
+        /// Path to the file
+        path: String,
+    },
+
+    /// Search symbols by name
+    #[command(name = "find-symbol")]
+    FindSymbol {
+        /// Symbol name or pattern
+        query: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Get detailed symbol info
+    #[command(name = "get-symbol")]
+    GetSymbol {
+        /// Symbol name
+        name: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Search text across indexed files
+    #[command(name = "search-text")]
+    SearchText {
+        /// Search query
+        query: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Find related files
+    #[command(name = "related")]
+    Related {
+        /// File path
+        path: String,
+    },
+
+    /// Build minimal context packet for a query
+    #[command(name = "context")]
+    Context {
+        /// Natural language query
+        query: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Build context from git diff
+    #[command(name = "diff-context")]
+    DiffContext {
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Watch filesystem and re-index on changes
+    Watch,
+
+    /// Start MCP server over stdio
+    Mcp,
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Show current config
+    Show,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+        )
+        .with_target(false)
+        .init();
+
+    let json = cli.json;
+
+    let result = match cli.command {
+        Commands::Init => commands::init(json),
+        Commands::Status => commands::status(json),
+        Commands::Doctor => commands::doctor(json),
+        Commands::ConfigShow { action: _ } => commands::config_show(json),
+        Commands::Index { full, changed } => commands::index(full, changed, json),
+        Commands::Clean => commands::clean(json),
+        Commands::RepoOutline { budget } => {
+            commands::repo_outline(parse_budget(&budget), json)
+        }
+        Commands::FileOutline { path } => commands::file_outline(&path, json),
+        Commands::FindSymbol { query, budget } => {
+            commands::find_symbol(&query, parse_budget(&budget), json)
+        }
+        Commands::GetSymbol { name, budget } => {
+            commands::get_symbol(&name, parse_budget(&budget), json)
+        }
+        Commands::SearchText { query, budget } => {
+            commands::search_text(&query, parse_budget(&budget), json)
+        }
+        Commands::Related { path } => commands::related(&path, json),
+        Commands::Context { query, budget } => {
+            commands::context(&query, parse_budget(&budget), json)
+        }
+        Commands::DiffContext { budget } => {
+            commands::diff_context(parse_budget(&budget), json)
+        }
+        Commands::Watch => commands::watch(),
+        Commands::Mcp => commands::mcp(),
+    };
+
+    if let Err(e) = result {
+        eprintln!("error: {:#}", e);
+        std::process::exit(1);
+    }
+}
+
+fn parse_budget(s: &str) -> Budget {
+    s.parse().unwrap_or(Budget::Small)
+}

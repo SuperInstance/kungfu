@@ -1,0 +1,8 @@
+[package]
+name = "kungfu-git"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,96 @@
+use kungfu_types::symbol::{Span, Symbol, SymbolKind};
+use tree_sitter::Node;
+
+pub fn extract(root: Node, source: &str, file_id: &str, file_path: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    collect_symbols(root, source, file_id, file_path, None, &mut symbols);
+    symbols
+}
+
+fn collect_symbols(
+    node: Node,
+    source: &str,
+    file_id: &str,
+    file_path: &str,
+    parent_id: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let kind = node.kind();
+
+    let symbol_kind = match kind {
+        "function_definition" => Some(SymbolKind::Function),
+        "class_definition" => Some(SymbolKind::Class),
+        _ => None,
+    };
+
+    if let Some(sk) = symbol_kind {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let name = node_text(name_node, source);
+            let span = node_span(&node);
+            let id = format!("s:{}:{}:{}", file_id, span.start_line, &name);
+            let signature = extract_signature(&node, source, sk);
+
+            let actual_kind = if sk == SymbolKind::Function && parent_id.is_some() {
+                SymbolKind::Method
+            } else {
+                sk
+            };
+
+            let sym = Symbol {
+                id: id.clone(),
+                file_id: file_id.to_string(),
+                name: name.clone(),
+                kind: actual_kind,
+                language: "python".to_string(),
+                path: file_path.to_string(),
+                signature,
+                span,
+                parent_symbol_id: parent_id.map(String::from),
+                exported: !name.starts_with('_'),
+                visibility: if name.starts_with('_') {
+                    Some("private".to_string())
+                } else {
+                    Some("public".to_string())
+                },
+                doc_summary: None,
+            };
+            symbols.push(sym);
+
+            // Recurse into class body
+            if sk == SymbolKind::Class {
+                if let Some(body) = node.child_by_field_name("body") {
+                    let mut cursor = body.walk();
+                    for child in body.children(&mut cursor) {
+                        collect_symbols(child, source, file_id, file_path, Some(&id), symbols);
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_symbols(child, source, file_id, file_path, parent_id, symbols);
+    }
+}
+
+fn extract_signature(node: &Node, source: &str, _kind: SymbolKind) -> Option<String> {
+    let start = node.start_byte();
+    let text = &source[start..node.end_byte().min(start + 300)];
+    let sig = text.lines().next().unwrap_or(text).trim();
+    Some(sig.trim_end_matches(':').trim().to_string())
+}
+
+fn node_text(node: Node, source: &str) -> String {
+    source[node.start_byte()..node.end_byte()].to_string()
+}
+
+fn node_span(node: &Node) -> Span {
+    Span {
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        start_col: node.start_position().column,
+        end_col: node.end_position().column,
+    }
+}

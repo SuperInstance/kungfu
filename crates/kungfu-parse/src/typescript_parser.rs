@@ -1,0 +1,181 @@
+use kungfu_types::symbol::{Span, Symbol, SymbolKind};
+use tree_sitter::Node;
+
+pub fn extract(root: Node, source: &str, file_id: &str, file_path: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    collect_symbols(root, source, file_id, file_path, None, &mut symbols);
+    symbols
+}
+
+fn collect_symbols(
+    node: Node,
+    source: &str,
+    file_id: &str,
+    file_path: &str,
+    parent_id: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let kind = node.kind();
+
+    let symbol_kind = match kind {
+        "function_declaration" => Some(SymbolKind::Function),
+        "method_definition" => Some(SymbolKind::Method),
+        "class_declaration" => Some(SymbolKind::Class),
+        "interface_declaration" => Some(SymbolKind::Interface),
+        "type_alias_declaration" => Some(SymbolKind::TypeAlias),
+        "enum_declaration" => Some(SymbolKind::Enum),
+        "lexical_declaration" | "variable_declaration" => {
+            // Check if it's a const with arrow function
+            if let Some(_declarator) = node.child_by_field_name("declarations") {
+                // handled below
+                None
+            } else {
+                None
+            }
+        }
+        "export_statement" => {
+            // Recurse into the exported declaration
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_symbols(child, source, file_id, file_path, parent_id, symbols);
+            }
+            // Mark last added symbol as exported
+            if let Some(last) = symbols.last_mut() {
+                last.exported = true;
+            }
+            return;
+        }
+        _ => None,
+    };
+
+    if let Some(sk) = symbol_kind {
+        if let Some(name) = find_name(&node, source) {
+            let span = node_span(&node);
+            let id = format!("s:{}:{}:{}", file_id, span.start_line, &name);
+            let signature = extract_signature(&node, source);
+
+            let sym = Symbol {
+                id: id.clone(),
+                file_id: file_id.to_string(),
+                name,
+                kind: sk,
+                language: detect_lang(file_path),
+                path: file_path.to_string(),
+                signature,
+                span,
+                parent_symbol_id: parent_id.map(String::from),
+                exported: false,
+                visibility: None,
+                doc_summary: None,
+            };
+            symbols.push(sym);
+
+            // Recurse into class body for methods
+            if sk == SymbolKind::Class {
+                if let Some(body) = node.child_by_field_name("body") {
+                    let mut cursor = body.walk();
+                    for child in body.children(&mut cursor) {
+                        collect_symbols(child, source, file_id, file_path, Some(&id), symbols);
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    // Handle const declarations (arrow functions, etc.)
+    if kind == "lexical_declaration" || kind == "variable_declaration" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "variable_declarator" {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    let name = node_text(name_node, source);
+                    if let Some(value) = child.child_by_field_name("value") {
+                        let vk = value.kind();
+                        if vk == "arrow_function" || vk == "function" {
+                            let span = node_span(&node);
+                            let id = format!("s:{}:{}:{}", file_id, span.start_line, &name);
+                            symbols.push(Symbol {
+                                id,
+                                file_id: file_id.to_string(),
+                                name,
+                                kind: SymbolKind::Function,
+                                language: detect_lang(file_path),
+                                path: file_path.to_string(),
+                                signature: extract_signature(&node, source),
+                                span,
+                                parent_symbol_id: parent_id.map(String::from),
+                                exported: false,
+                                visibility: None,
+                                doc_summary: None,
+                            });
+                        } else {
+                            let span = node_span(&node);
+                            let id = format!("s:{}:{}:{}", file_id, span.start_line, &name);
+                            symbols.push(Symbol {
+                                id,
+                                file_id: file_id.to_string(),
+                                name,
+                                kind: SymbolKind::Variable,
+                                language: detect_lang(file_path),
+                                path: file_path.to_string(),
+                                signature: None,
+                                span,
+                                parent_symbol_id: parent_id.map(String::from),
+                                exported: false,
+                                visibility: None,
+                                doc_summary: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // Recurse into children for other nodes
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_symbols(child, source, file_id, file_path, parent_id, symbols);
+    }
+}
+
+fn find_name(node: &Node, source: &str) -> Option<String> {
+    node.child_by_field_name("name")
+        .map(|n| node_text(n, source))
+}
+
+fn extract_signature(node: &Node, source: &str) -> Option<String> {
+    let start = node.start_byte();
+    let text = &source[start..node.end_byte().min(start + 300)];
+    let sig = text
+        .lines()
+        .next()
+        .unwrap_or(text)
+        .trim()
+        .trim_end_matches('{')
+        .trim();
+    Some(sig.to_string())
+}
+
+fn detect_lang(path: &str) -> String {
+    if path.ends_with(".ts") || path.ends_with(".tsx") {
+        "typescript".to_string()
+    } else {
+        "javascript".to_string()
+    }
+}
+
+fn node_text(node: Node, source: &str) -> String {
+    source[node.start_byte()..node.end_byte()].to_string()
+}
+
+fn node_span(node: &Node) -> Span {
+    Span {
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        start_col: node.start_position().column,
+        end_col: node.end_position().column,
+    }
+}
