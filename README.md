@@ -54,6 +54,108 @@ kungfu clean                           # wipe index and cache
 
 All commands support `--json` for machine-readable output and `--budget small|medium|full` where applicable.
 
+## Examples
+
+### Status
+
+```
+$ kungfu status
+Project: kungfu
+Root:    /Users/denis/Projects/kungfu
+Files:   44
+Symbols: 228
+Git:     yes
+Languages:
+  rust: 28
+  toml: 14
+  markdown: 1
+```
+
+### Repo outline
+
+```
+$ kungfu repo-outline
+Project: kungfu (44 files, 228 symbols)
+
+Languages:
+  rust: 28
+  toml: 14
+
+Top directories:
+  crates/ (41 files)
+
+Entrypoints:
+  Cargo.toml
+  crates/kungfu-cli/src/main.rs
+```
+
+### File outline
+
+```
+$ kungfu file-outline crates/kungfu-core/src/lib.rs
+crates/kungfu-core/src/lib.rs (rust)
+
+  L15 struct pub struct KungfuService [pub]
+  L56 impl KungfuService
+  L57 method pub fn open(start_dir: &Path) -> Result<Self> [pub]
+  L74 method pub fn status(&self) -> Result<StatusInfo> [pub]
+  L96 method pub fn index_full(&self) -> Result<IndexStats> [pub]
+  L108 method pub fn repo_outline(&self, budget: Budget) -> Result<RepoOutline> [pub]
+  L197 method pub fn find_symbol(&self, query: &str, budget: Budget) [pub]
+  L209 method pub fn context(&self, query: &str, budget: Budget) [pub]
+```
+
+### Find symbol
+
+```
+$ kungfu find-symbol Indexer
+  1.00  crates/kungfu-index/src/indexer.rs:14  struct pub struct Indexer
+  1.00  crates/kungfu-index/src/indexer.rs:29  impl Indexer
+  1.00  crates/kungfu-index/src/lib.rs:2       module indexer
+```
+
+### Search text
+
+```
+$ kungfu search-text parser
+  0.90  crates/kungfu-parse/src/rust_parser.rs (rust)
+  0.90  crates/kungfu-parse/src/go_parser.rs (rust)
+  0.90  crates/kungfu-parse/src/typescript_parser.rs (rust)
+  0.90  crates/kungfu-parse/src/python_parser.rs (rust)
+  0.80  crates/kungfu-parse/src/lib.rs (rust)
+```
+
+### Context packet
+
+```
+$ kungfu context "incremental indexing" --budget small
+Query:  incremental indexing
+Budget: small
+Items:  2
+
+  0.45  [crates/kungfu-index/src/indexer.rs] index_incremental
+        sig: pub fn index_incremental(&mut self) -> Result<IndexStats>
+  0.45  [crates/kungfu-core/src/lib.rs] index_incremental
+        sig: pub fn index_incremental(&self) -> Result<IndexStats>
+```
+
+### Doctor
+
+```
+$ kungfu doctor
+  [OK] version: 0.1.0
+  [OK] project_root: /Users/denis/Projects/kungfu
+  [OK] kungfu_dir: .kungfu exists
+  [OK] config: valid
+  [OK] index_files: 44 files indexed
+  [OK] index_symbols: 228 symbols extracted
+  [OK] index_fingerprints: fingerprints tracked
+  [OK] git: git repository detected
+  [OK] parsers: rust, typescript, javascript, python, go
+
+All checks passed.
+```
+
 ## MCP server
 
 ```sh
