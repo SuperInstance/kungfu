@@ -77,13 +77,25 @@ fn collect_symbols(
 
 fn extract_signature(node: &Node, source: &str, _kind: SymbolKind) -> Option<String> {
     let start = node.start_byte();
-    let text = &source[start..node.end_byte().min(start + 300)];
+    let end = node.end_byte().min(start + 300);
+    let text = &source[start..safe_char_boundary(source, end)];
     let sig = text.lines().next().unwrap_or(text).trim();
     Some(sig.trim_end_matches(':').trim().to_string())
 }
 
 fn node_text(node: Node, source: &str) -> String {
     source[node.start_byte()..node.end_byte()].to_string()
+}
+
+fn safe_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 fn node_span(node: &Node) -> Span {

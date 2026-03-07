@@ -94,13 +94,25 @@ fn extract_func_sig(node: &Node, source: &str) -> Option<String> {
         let end = body.start_byte();
         Some(source[start..end].trim().to_string())
     } else {
-        let text = &source[start..node.end_byte().min(start + 200)];
+        let end = node.end_byte().min(start + 200);
+        let text = &source[start..safe_char_boundary(source, end)];
         Some(text.lines().next().unwrap_or(text).trim().to_string())
     }
 }
 
 fn node_text(node: Node, source: &str) -> String {
     source[node.start_byte()..node.end_byte()].to_string()
+}
+
+fn safe_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 fn node_span(node: &Node) -> Span {

@@ -126,7 +126,7 @@ fn extract_signature(node: &Node, source: &str, kind: &str) -> Option<String> {
         "struct_item" | "enum_item" | "trait_item" | "type_item" => {
             let start = node.start_byte();
             let end = node.end_byte().min(start + 200);
-            let text = &source[start..end];
+            let text = &source[start..safe_char_boundary(source, end)];
             // Take first line or up to opening brace
             let sig = text
                 .lines()
@@ -153,6 +153,17 @@ fn detect_visibility(node: &Node, source: &str) -> Option<String> {
 
 fn node_text(node: Node, source: &str) -> String {
     source[node.start_byte()..node.end_byte()].to_string()
+}
+
+fn safe_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 fn node_span(node: &Node) -> Span {

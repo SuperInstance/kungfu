@@ -148,7 +148,8 @@ fn find_name(node: &Node, source: &str) -> Option<String> {
 
 fn extract_signature(node: &Node, source: &str) -> Option<String> {
     let start = node.start_byte();
-    let text = &source[start..node.end_byte().min(start + 300)];
+    let end = node.end_byte().min(start + 300);
+    let text = &source[start..safe_char_boundary(source, end)];
     let sig = text
         .lines()
         .next()
@@ -169,6 +170,17 @@ fn detect_lang(path: &str) -> String {
 
 fn node_text(node: Node, source: &str) -> String {
     source[node.start_byte()..node.end_byte()].to_string()
+}
+
+fn safe_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 fn node_span(node: &Node) -> Span {
