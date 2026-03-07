@@ -90,6 +90,21 @@ Runs an MCP server over stdio. Add to your agent config:
 | `build_task_context` | Ranked context packet for a task |
 | `diff_context` | Context focused on git changes |
 
+## Agent rules
+
+Add to your agent system prompt or `CLAUDE.md` / project rules:
+
+```
+Before reading project files, use kungfu MCP tools to understand the codebase:
+1. Start with `repo_outline` to see project structure.
+2. Use `find_symbol` / `get_symbol` to locate code by name instead of reading whole files.
+3. Use `build_task_context` with your task description to get a ranked minimal context packet.
+4. Use `file_outline` before reading a file — often the outline is enough.
+5. Only read full files when the above tools confirm you need them.
+6. After git changes, use `diff_context` to focus on what changed.
+Prefer small budget. Escalate to medium/full only when small is insufficient.
+```
+
 ## How it works
 
 - Scans project files respecting `.gitignore` and configurable ignore rules
