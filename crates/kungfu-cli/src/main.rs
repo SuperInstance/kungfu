@@ -28,10 +28,7 @@ enum Commands {
 
     /// Show current configuration
     #[command(name = "config")]
-    ConfigShow {
-        #[command(subcommand)]
-        action: Option<ConfigAction>,
-    },
+    Config,
 
     /// Build or update the project index
     Index {
@@ -125,12 +122,6 @@ enum Commands {
     Mcp,
 }
 
-#[derive(Subcommand)]
-enum ConfigAction {
-    /// Show current config
-    Show,
-}
-
 fn main() {
     let cli = Cli::parse();
 
@@ -147,7 +138,7 @@ fn main() {
         Commands::Init => commands::init(json),
         Commands::Status => commands::status(json),
         Commands::Doctor => commands::doctor(json),
-        Commands::ConfigShow { action: _ } => commands::config_show(json),
+        Commands::Config => commands::config_show(json),
         Commands::Index { full, changed } => commands::index(full, changed, json),
         Commands::Clean => commands::clean(json),
         Commands::RepoOutline { budget } => {

@@ -105,6 +105,25 @@ impl KungfuService {
         indexer.index_incremental()
     }
 
+    pub fn index_changed(&self) -> Result<kungfu_index::indexer::IndexStats> {
+        if !kungfu_git::is_git_repo(&self.project.root) {
+            bail!("--changed requires a git repository");
+        }
+        let changed = kungfu_git::changed_files(&self.project.root)?;
+        if changed.is_empty() {
+            return Ok(kungfu_index::indexer::IndexStats {
+                total_files: 0,
+                new_files: 0,
+                changed_files: 0,
+                removed_files: 0,
+                symbols_extracted: 0,
+            });
+        }
+        let store = self.store();
+        let mut indexer = Indexer::new(&self.project.root, self.project.config.clone(), store);
+        indexer.index_only(&changed)
+    }
+
     pub fn repo_outline(&self, budget: Budget) -> Result<RepoOutline> {
         let store = self.store();
         let files = store.load_files()?;
@@ -216,10 +235,27 @@ impl KungfuService {
         // Search symbols
         let symbol_results = search.find_symbol(query, Budget::Full)?;
 
-        let scored_symbols: Vec<(Symbol, f64)> = symbol_results
+        let mut scored_symbols: Vec<(Symbol, f64)> = symbol_results
             .into_iter()
             .map(|r| (r.item, r.score))
             .collect();
+
+        // Also search files and pull in their symbols for broader context
+        let file_results = search.search_text(query, Budget::Full)?;
+        let all_symbols = search.get_all_symbols()?;
+        let seen_ids: std::collections::HashSet<String> =
+            scored_symbols.iter().map(|(s, _)| s.id.clone()).collect();
+
+        for fr in &file_results {
+            let file_syms: Vec<_> = all_symbols
+                .iter()
+                .filter(|s| s.file_id == fr.item.id && !seen_ids.contains(&s.id))
+                .collect();
+            for sym in file_syms {
+                // Score file-matched symbols slightly lower than direct symbol matches
+                scored_symbols.push((sym.clone(), fr.score * 0.7));
+            }
+        }
 
         Ok(build_context_packet(query, scored_symbols, budget))
     }

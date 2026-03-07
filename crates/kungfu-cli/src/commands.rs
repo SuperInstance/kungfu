@@ -243,13 +243,15 @@ pub fn config_show(json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn index(full: bool, _changed: bool, json: bool) -> Result<()> {
+pub fn index(full: bool, changed: bool, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
 
     let start = std::time::Instant::now();
     let stats = if full {
         service.index_full()?
+    } else if changed {
+        service.index_changed()?
     } else {
         service.index_incremental()?
     };
@@ -452,7 +454,7 @@ pub fn find_symbol(query: &str, budget: Budget, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn get_symbol(name: &str, _budget: Budget, json: bool) -> Result<()> {
+pub fn get_symbol(name: &str, budget: Budget, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
     let symbol = service.get_symbol(name)?;
@@ -460,7 +462,26 @@ pub fn get_symbol(name: &str, _budget: Budget, json: bool) -> Result<()> {
     match symbol {
         Some(sym) => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&sym)?);
+                let mut out = serde_json::to_value(&sym)?;
+                // At medium+ budget, include sibling symbols from the same file
+                if budget >= Budget::Medium {
+                    let outline = service.file_outline(&sym.path)?;
+                    let siblings: Vec<_> = outline
+                        .symbols
+                        .iter()
+                        .filter(|s| s.name != sym.name)
+                        .take(budget.top_k())
+                        .map(|s| {
+                            serde_json::json!({
+                                "name": s.name,
+                                "kind": s.kind,
+                                "line": s.line,
+                            })
+                        })
+                        .collect();
+                    out["siblings"] = serde_json::json!(siblings);
+                }
+                println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
                 println!("{} ({})", sym.name, sym.kind);
                 println!("  path: {}:{}", sym.path, sym.span.start_line);
@@ -472,6 +493,26 @@ pub fn get_symbol(name: &str, _budget: Budget, json: bool) -> Result<()> {
                 }
                 if let Some(ref vis) = sym.visibility {
                     println!("  visibility: {}", vis);
+                }
+                if let Some(ref doc) = sym.doc_summary {
+                    println!("  doc:  {}", doc);
+                }
+                // At medium+ budget, show sibling symbols
+                if budget >= Budget::Medium {
+                    let outline = service.file_outline(&sym.path)?;
+                    let siblings: Vec<_> = outline
+                        .symbols
+                        .iter()
+                        .filter(|s| s.name != sym.name)
+                        .take(budget.top_k())
+                        .collect();
+                    if !siblings.is_empty() {
+                        println!();
+                        println!("  Siblings in {}:", sym.path);
+                        for s in &siblings {
+                            println!("    L{} {} {}", s.line, s.kind, s.name);
+                        }
+                    }
                 }
             }
         }

@@ -175,6 +175,82 @@ impl Indexer {
         Ok(stats)
     }
 
+    /// Index only the specified files (by relative path), keeping everything else unchanged.
+    pub fn index_only(&mut self, changed_paths: &[String]) -> Result<IndexStats> {
+        let old_fingerprints = self.store.load_fingerprints()?;
+        let old_files = self.store.load_files()?;
+        let old_symbols = self.store.load_symbols()?;
+
+        let changed_set: std::collections::HashSet<&str> =
+            changed_paths.iter().map(|s| s.as_str()).collect();
+
+        let mut new_fingerprints = old_fingerprints.clone();
+        let mut new_files: Vec<FileEntry> = Vec::new();
+        let mut new_symbols: Vec<Symbol> = Vec::new();
+
+        let mut stats = IndexStats {
+            total_files: 0,
+            new_files: 0,
+            changed_files: 0,
+            removed_files: 0,
+            symbols_extracted: 0,
+        };
+
+        // Keep unchanged files
+        for f in &old_files {
+            if !changed_set.contains(f.path.as_str()) {
+                new_files.push(f.clone());
+                let file_syms: Vec<_> = old_symbols
+                    .iter()
+                    .filter(|s| s.file_id == f.id)
+                    .cloned()
+                    .collect();
+                new_symbols.extend(file_syms);
+            }
+        }
+
+        // Re-index changed files
+        for rel_path in changed_paths {
+            let abs_path = self.root.join(rel_path);
+            if !abs_path.exists() {
+                // File was deleted
+                new_fingerprints.remove(rel_path);
+                stats.removed_files += 1;
+                continue;
+            }
+
+            if old_fingerprints.contains_key(rel_path) {
+                stats.changed_files += 1;
+            } else {
+                stats.new_files += 1;
+            }
+
+            match self.index_file(&abs_path) {
+                Ok((entry, symbols)) => {
+                    new_fingerprints.insert(entry.path.clone(), entry.hash.clone());
+                    stats.symbols_extracted += symbols.len();
+                    new_symbols.extend(symbols);
+                    new_files.push(entry);
+                }
+                Err(e) => {
+                    warn!("failed to index {}: {}", abs_path.display(), e);
+                }
+            }
+        }
+
+        stats.total_files = new_files.len();
+
+        self.store.save_files(&new_files)?;
+        self.store.save_symbols(&new_symbols)?;
+        self.store.save_fingerprints(&new_fingerprints)?;
+
+        info!(
+            "changed-only index: {} changed, {} new, {} removed",
+            stats.changed_files, stats.new_files, stats.removed_files
+        );
+        Ok(stats)
+    }
+
     fn index_file(&mut self, path: &Path) -> Result<(FileEntry, Vec<Symbol>)> {
         let content = std::fs::read(path)?;
         let hash = blake3::hash(&content).to_hex().to_string();
