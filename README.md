@@ -157,18 +157,46 @@ Add to your agent config (Claude Code, Cursor, etc.):
 
 ## Agent rules
 
-Add to `CLAUDE.md` or system prompt:
+Add to `CLAUDE.md` or system prompt of your project:
+
+```markdown
+## Context retrieval
+- Before reading files, use `kungfu` MCP tools to understand the codebase.
+- Use `ask_context` with the task description to get a ranked context packet.
+- Use `find_symbol` / `get_symbol` to locate code by name instead of reading whole files.
+- Use `file_outline` before reading a file — often the outline is enough.
+- Only read full files when the above tools confirm you need them.
+- After git changes, use `diff_context` to focus on what changed.
+- Prefer tiny/small budget. Escalate to medium/full only when needed.
+```
+
+### Recommended workflow
 
 ```
-Before reading project files, use kungfu MCP tools:
-1. Start with `repo_outline` to see project structure.
-2. Use `ask_context` with your task description to get a ranked context packet.
-3. Use `find_symbol` / `get_symbol` to locate code by name.
-4. Use `file_outline` before reading a file — often the outline is enough.
-5. Only read full files when the above tools confirm you need them.
-6. After git changes, use `diff_context` to focus on what changed.
-Prefer tiny/small budget. Escalate to medium/full only when needed.
+Task received
+    │
+    ▼
+ask_context("task description", budget: "tiny")
+    │
+    ├── Got enough? → Start working
+    │
+    ├── Need more detail? → ask_context(..., budget: "small")
+    │
+    ├── Need specific symbol? → find_symbol / get_symbol
+    │
+    ├── Need file structure? → file_outline
+    │
+    └── Only then → Read full file
 ```
+
+### Token savings (measured on real projects)
+
+| Project size | Without kungfu | With kungfu (small) | Savings |
+|-------------|---------------|-------------------|---------|
+| ~50 files | ~7,500 tokens | ~275 tokens | **27x** |
+| ~120 files | ~3,500 tokens | ~205 tokens | **17x** |
+| ~170 files (TS) | ~19,000 tokens | ~615 tokens | **31x** |
+| ~170 files (game) | ~64,000 tokens | ~895 tokens | **71x** |
 
 ## How it works
 
