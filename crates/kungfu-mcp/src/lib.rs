@@ -26,7 +26,10 @@ impl KungfuMcp {
     }
 
     fn service(&self) -> std::result::Result<KungfuService, String> {
-        KungfuService::open(&self.project_root).map_err(|e| e.to_string())
+        let svc = KungfuService::open(&self.project_root).map_err(|e| e.to_string())?;
+        // Auto-reindex if stale (best-effort, don't fail on reindex errors)
+        let _ = svc.ensure_fresh_index();
+        Ok(svc)
     }
 }
 

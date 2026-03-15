@@ -72,6 +72,70 @@ impl KungfuService {
         SearchEngine::new(self.store())
     }
 
+    /// Check if index is stale and auto-reindex if needed.
+    /// Compares fingerprints.json mtime with project files.
+    pub fn ensure_fresh_index(&self) -> Result<bool> {
+        let fp_path = self.project.index_dir().join("fingerprints.json");
+        if !fp_path.exists() {
+            // No index at all — full index needed
+            info!("no index found, running full index");
+            self.index_full()?;
+            return Ok(true);
+        }
+
+        let fp_mtime = std::fs::metadata(&fp_path)?.modified()?;
+
+        // Sample a few key project files for staleness check (fast heuristic)
+        let root = &self.project.root;
+        let markers = ["Cargo.toml", "package.json", "go.mod", "pyproject.toml", "Cargo.lock", "package-lock.json", "bun.lock"];
+        let mut stale = false;
+        for marker in &markers {
+            let p = root.join(marker);
+            if p.exists() {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    if let Ok(mtime) = meta.modified() {
+                        if mtime > fp_mtime {
+                            stale = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also check src/ directory for any file newer than index
+        if !stale {
+            let src_dirs = ["src", "crates", "packages", "lib", "app", "server", "client"];
+            'outer: for dir in &src_dirs {
+                let d = root.join(dir);
+                if d.is_dir() {
+                    if let Ok(entries) = std::fs::read_dir(&d) {
+                        for entry in entries.take(20) {
+                            if let Ok(entry) = entry {
+                                if let Ok(meta) = entry.metadata() {
+                                    if let Ok(mtime) = meta.modified() {
+                                        if mtime > fp_mtime {
+                                            stale = true;
+                                            break 'outer;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if stale {
+            info!("index is stale, running incremental reindex");
+            self.index_incremental()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub fn status(&self) -> Result<StatusInfo> {
         let store = self.store();
         let files = store.load_files()?;
@@ -305,7 +369,7 @@ impl KungfuService {
 
         let snippet_lines = budget.max_lines();
         if snippet_lines > 0 {
-            self.fill_snippets(&mut packet, snippet_lines);
+            self.fill_snippets(&mut packet, snippet_lines, &[]);
         }
 
         Ok(packet)
@@ -560,34 +624,30 @@ impl KungfuService {
         // 6. Extract snippets based on budget
         let snippet_lines = budget.max_lines();
         if snippet_lines > 0 {
-            self.fill_snippets(&mut packet, snippet_lines);
+            self.fill_snippets(&mut packet, snippet_lines, &keywords);
         }
 
         Ok(packet)
     }
 
     /// Fill snippet fields in context packet items by reading source files.
-    fn fill_snippets(&self, packet: &mut ContextPacket, max_lines: usize) {
+    /// If keywords are provided, extract lines containing those keywords with context.
+    /// Falls back to first N lines of symbol if no keyword matches found.
+    fn fill_snippets(&self, packet: &mut ContextPacket, max_lines: usize, keywords: &[&str]) {
         let mut file_cache: HashMap<String, Vec<String>> = HashMap::new();
+        let all_symbols = self.search().get_all_symbols().unwrap_or_default();
 
         for item in &mut packet.items {
-            // Find the symbol's span from the index
-            let span = self
-                .search()
-                .get_all_symbols()
-                .ok()
-                .and_then(|syms| {
-                    syms.iter()
-                        .find(|s| s.path == item.path && s.name == item.name)
-                        .map(|s| (s.span.start_line, s.span.end_line))
-                });
+            let span = all_symbols
+                .iter()
+                .find(|s| s.path == item.path && s.name == item.name)
+                .map(|s| (s.span.start_line, s.span.end_line));
 
             let (start, end) = match span {
                 Some(s) => s,
                 None => continue,
             };
 
-            // Read file (cached)
             let lines = file_cache
                 .entry(item.path.clone())
                 .or_insert_with(|| {
@@ -601,24 +661,27 @@ impl KungfuService {
                 continue;
             }
 
-            // Extract snippet: symbol body, capped at max_lines
-            let start_idx = start.saturating_sub(1); // 1-based to 0-based
+            let start_idx = start.saturating_sub(1);
             let end_idx = end.min(lines.len());
-            let symbol_lines = end_idx - start_idx;
 
-            let snippet_lines: Vec<&str> = if symbol_lines <= max_lines {
-                // Whole symbol fits
-                lines[start_idx..end_idx].iter().map(|s| s.as_str()).collect()
-            } else {
-                // Take first max_lines
-                lines[start_idx..start_idx + max_lines]
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect()
-            };
+            // Try keyword-relevant extraction first
+            if !keywords.is_empty() && end_idx > start_idx {
+                let relevant = extract_keyword_lines(lines, start_idx, end_idx, keywords, max_lines);
+                if !relevant.is_empty() {
+                    item.snippet = Some(relevant);
+                    continue;
+                }
+            }
 
-            if !snippet_lines.is_empty() {
-                item.snippet = Some(snippet_lines.join("\n"));
+            // Fallback: first max_lines of symbol
+            let symbol_len = end_idx - start_idx;
+            let take = symbol_len.min(max_lines);
+            let snippet: Vec<&str> = lines[start_idx..start_idx + take]
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            if !snippet.is_empty() {
+                item.snippet = Some(snippet.join("\n"));
             }
         }
     }
@@ -657,6 +720,66 @@ impl KungfuService {
 
         Ok(build_context_packet("diff context", scored, budget))
     }
+}
+
+/// Extract lines from a symbol body that contain query keywords, with 1 line of context.
+fn extract_keyword_lines(
+    lines: &[String],
+    start_idx: usize,
+    end_idx: usize,
+    keywords: &[&str],
+    max_lines: usize,
+) -> String {
+    use kungfu_search::simple_stem;
+
+    // Find line indices within symbol that contain any keyword (or stem)
+    let mut hit_indices: Vec<usize> = Vec::new();
+    for i in start_idx..end_idx {
+        let line_lower = lines[i].to_lowercase();
+        let matches = keywords.iter().any(|kw| {
+            line_lower.contains(kw)
+                || simple_stem(kw).map_or(false, |s| line_lower.contains(&s))
+        });
+        if matches {
+            hit_indices.push(i);
+        }
+    }
+
+    if hit_indices.is_empty() {
+        return String::new();
+    }
+
+    // Always include first line (signature) + keyword-matched lines with 1 line context
+    let mut include: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    include.insert(start_idx); // signature line
+
+    for &idx in &hit_indices {
+        let ctx_start = idx.saturating_sub(1).max(start_idx);
+        let ctx_end = (idx + 2).min(end_idx);
+        for i in ctx_start..ctx_end {
+            include.insert(i);
+        }
+    }
+
+    // Build snippet, inserting "..." for gaps
+    let indices: Vec<usize> = include.into_iter().collect();
+    let mut result = Vec::new();
+    let mut prev: Option<usize> = None;
+
+    for &i in &indices {
+        if result.len() >= max_lines {
+            break;
+        }
+        if let Some(p) = prev {
+            if i > p + 1 {
+                result.push("    ...".to_string());
+            }
+        }
+        result.push(lines[i].clone());
+        prev = Some(i);
+    }
+
+    result.join("\n")
 }
 
 fn detect_primary_language(files: &[FileEntry]) -> Option<String> {

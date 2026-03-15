@@ -474,7 +474,7 @@ fn score_path_match(path: &str, query: &str, words: &[&str]) -> f64 {
 }
 
 /// Simple English stemming: strip common suffixes.
-fn simple_stem(word: &str) -> Option<String> {
+pub fn simple_stem(word: &str) -> Option<String> {
     if word.len() < 5 {
         return None;
     }
