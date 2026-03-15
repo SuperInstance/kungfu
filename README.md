@@ -189,14 +189,60 @@ ask_context("task description", budget: "tiny")
     └── Only then → Read full file
 ```
 
-### Token savings (measured on real projects)
+### How an agent uses kungfu
 
-| Project size | Without kungfu | With kungfu (small) | Savings |
-|-------------|---------------|-------------------|---------|
-| ~50 files | ~7,500 tokens | ~275 tokens | **27x** |
-| ~120 files | ~3,500 tokens | ~205 tokens | **17x** |
-| ~170 files (TS) | ~19,000 tokens | ~615 tokens | **31x** |
-| ~170 files (game) | ~64,000 tokens | ~895 tokens | **71x** |
+Agent receives task: *"fix the authentication bug"*
+
+**Without kungfu** — agent explores blindly:
+```
+Glob("**/*.ts")           → 200 files, which to read?
+Grep("auth")              → 30 matches across many files
+Read("src/auth/service.ts")    → 500 lines, 2000 tokens
+Read("src/auth/middleware.ts") → 300 lines, 1200 tokens
+Read("src/auth/controller.ts") → 400 lines, 1600 tokens
+... more files, more tokens
+```
+
+**With kungfu** — one MCP call:
+```json
+→ tools/call: ask_context({"query": "authentication bug fix", "budget": "small"})
+
+← {
+    "intent": "debug",
+    "items": [
+      {
+        "name": "AuthController",
+        "path": "src/modules/auth/auth.controller.ts",
+        "signature": "class AuthController",
+        "why": "symbol name match",
+        "score": 0.50,
+        "snippet": "export class AuthController {\n  constructor(\n    private readonly authService: AuthService,\n  ) {}\n\n  @Post('login')\n  async login(@Body() dto: LoginDto) {\n    return this.authService.login(dto);\n  }\n  ..."
+      },
+      {
+        "name": "AuthService",
+        "path": "src/modules/auth/auth.service.ts",
+        "signature": "class AuthService",
+        "why": "symbol name match",
+        "score": 0.50,
+        "snippet": "export class AuthService {\n  async login(dto: LoginDto) { ... }\n  async validateToken(token: string) { ... }\n  ..."
+      }
+    ]
+  }
+```
+
+Agent immediately knows where to look. Then reads only the relevant file.
+
+### Token savings (open-source projects)
+
+| Project | Lang | Files | Query | kungfu | naive grep+read | Savings |
+|---------|------|-------|-------|--------|-----------------|---------|
+| [ruff](https://github.com/astral-sh/ruff) | Rust | 9,702 | "how does the linter check rules" | 722 | 137,767 | **190x** |
+| [ollama](https://github.com/ollama/ollama) | Go | 1,834 | "how does model loading and inference work" | 1,100 | 110,122 | **100x** |
+| [SolidJS](https://github.com/solidjs/solid) | TS | 168 | "how does the reactive signal system work" | 459 | 33,577 | **73x** |
+| [leptos](https://github.com/leptos-rs/leptos) | Rust | 1,453 | "how does reactive rendering work" | 593 | 40,772 | **68x** |
+| [tRPC](https://github.com/trpc/trpc) | TS | 1,290 | "how does the RPC client call server procedures" | 680 | 43,773 | **64x** |
+| [pydantic](https://github.com/pydantic/pydantic) | Python | 729 | "how does field validation work" | 977 | 53,864 | **55x** |
+| [FastAPI](https://github.com/fastapi/fastapi) | Python | 2,882 | "how does dependency injection work" | 624 | 17,089 | **27x** |
 
 ## How it works
 
