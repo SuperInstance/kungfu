@@ -440,6 +440,19 @@ impl KungfuService {
             }
         }
 
+        // Strategy B2: content grep — search file bodies for keywords
+        if scored_symbols.len() < budget.top_k() {
+            let content_matches = self.grep_content(&keywords, &seen_ids, budget.top_k());
+            for (sym, matched_line) in content_matches {
+                seen_ids.insert(sym.id.clone());
+                scored_symbols.push(ScoredSymbol {
+                    symbol: sym,
+                    score: 0.45,
+                    reason: format!("content match: {}", matched_line),
+                });
+            }
+        }
+
         // Strategy C: sibling symbols from top match's file (important for impact/understand)
         if matches!(intent, Intent::Impact | Intent::Understand) {
             if let Some(top) = scored_symbols
@@ -628,6 +641,115 @@ impl KungfuService {
         }
 
         Ok(packet)
+    }
+
+    /// Grep file contents for keywords, return matching symbols with the matched line.
+    fn grep_content(
+        &self,
+        keywords: &[&str],
+        seen_ids: &HashSet<String>,
+        limit: usize,
+    ) -> Vec<(Symbol, String)> {
+        if keywords.is_empty() {
+            return Vec::new();
+        }
+
+        let store = self.store();
+        let files = store.load_files().unwrap_or_default();
+        let symbols = store.load_symbols().unwrap_or_default();
+
+        // Build file_id → symbols map
+        let mut file_symbols: HashMap<&str, Vec<&Symbol>> = HashMap::new();
+        for sym in &symbols {
+            if !seen_ids.contains(&sym.id) {
+                file_symbols.entry(sym.file_id.as_str()).or_default().push(sym);
+            }
+        }
+
+        let mut results: Vec<(Symbol, String)> = Vec::new();
+
+        // Only scan code files
+        for f in &files {
+            if results.len() >= limit {
+                break;
+            }
+
+            let lang = f.language.as_deref().unwrap_or("");
+            if !matches!(lang, "rust" | "typescript" | "javascript" | "python" | "go") {
+                continue;
+            }
+
+            let abs_path = self.project.root.join(&f.path);
+            let content = match std::fs::read_to_string(&abs_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Check if any keyword appears in file content
+            let content_lower = content.to_lowercase();
+            let matched_keyword = keywords.iter().find(|kw| {
+                content_lower.contains(*kw)
+                    || kungfu_search::simple_stem(kw)
+                        .map_or(false, |s| content_lower.contains(&s))
+            });
+
+            let keyword = match matched_keyword {
+                Some(kw) => *kw,
+                None => continue,
+            };
+
+            // Find the best matched line
+            let matched_line = content
+                .lines()
+                .find(|line| {
+                    let ll = line.to_lowercase();
+                    ll.contains(keyword)
+                        || kungfu_search::simple_stem(keyword)
+                            .map_or(false, |s| ll.contains(&s))
+                })
+                .unwrap_or("")
+                .trim();
+
+            if matched_line.is_empty() {
+                continue;
+            }
+
+            let snippet = if matched_line.len() > 100 {
+                format!("{}...", &matched_line[..100])
+            } else {
+                matched_line.to_string()
+            };
+
+            // Find the best symbol in this file to attach the match to
+            if let Some(file_syms) = file_symbols.get(f.id.as_str()) {
+                // Prefer symbol whose span contains the match
+                let match_line_num = content
+                    .lines()
+                    .enumerate()
+                    .find(|(_, line)| {
+                        let ll = line.to_lowercase();
+                        ll.contains(keyword)
+                            || kungfu_search::simple_stem(keyword)
+                                .map_or(false, |s| ll.contains(&s))
+                    })
+                    .map(|(i, _)| i + 1)
+                    .unwrap_or(0);
+
+                let best = file_syms
+                    .iter()
+                    .filter(|s| s.span.start_line <= match_line_num && s.span.end_line >= match_line_num)
+                    .min_by_key(|s| s.span.end_line - s.span.start_line) // smallest containing symbol
+                    .or_else(|| file_syms.first()); // fallback: first symbol in file
+
+                if let Some(sym) = best {
+                    if !seen_ids.contains(&sym.id) {
+                        results.push(((*sym).clone(), snippet));
+                    }
+                }
+            }
+        }
+
+        results
     }
 
     /// Fill snippet fields in context packet items by reading source files.
