@@ -202,7 +202,19 @@ pub fn doctor(json: bool) -> Result<()> {
                         .iter()
                         .filter(|f| {
                             let lang = f.get("language").and_then(|l| l.as_str()).unwrap_or("");
-                            matches!(lang, "rust" | "typescript" | "javascript" | "python" | "go")
+                            if !matches!(lang, "rust" | "typescript" | "javascript" | "python" | "go") {
+                                return false;
+                            }
+                            // Exclude tiny files and test fixtures from coverage
+                            let size = f.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                            if size < 100 { return false; }
+                            let path = f.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                            !path.contains("/fixtures/")
+                                && !path.contains("/resources/")
+                                && !path.contains("/snapshots/")
+                                && !path.contains("/__snapshots__/")
+                                && !path.contains("/testdata/")
+                                && !path.contains("/test_data/")
                         })
                         .filter_map(|f| f.get("id").and_then(|id| id.as_str()).map(String::from))
                         .collect();
