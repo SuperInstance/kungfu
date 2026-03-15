@@ -1,5 +1,48 @@
+use crate::RawImport;
 use kungfu_types::symbol::{Span, Symbol, SymbolKind};
 use tree_sitter::Node;
+
+pub fn extract_imports(root: Node, source: &str) -> Vec<RawImport> {
+    let mut imports = Vec::new();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        if child.kind() == "import_declaration" {
+            let mut inner_cursor = child.walk();
+            for spec in child.children(&mut inner_cursor) {
+                if spec.kind() == "import_spec" || spec.kind() == "interpreted_string_literal" {
+                    let text = node_text(spec, source);
+                    let path = text.trim_matches('"').to_string();
+                    if !path.is_empty() {
+                        imports.push(RawImport {
+                            path,
+                            names: Vec::new(),
+                            line: spec.start_position().row + 1,
+                        });
+                    }
+                } else if spec.kind() == "import_spec_list" {
+                    let mut list_cursor = spec.walk();
+                    for item in spec.children(&mut list_cursor) {
+                        if item.kind() == "import_spec" {
+                            if let Some(path_node) = item.child_by_field_name("path") {
+                                let path = node_text(path_node, source)
+                                    .trim_matches('"')
+                                    .to_string();
+                                imports.push(RawImport {
+                                    path,
+                                    names: Vec::new(),
+                                    line: item.start_position().row + 1,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    imports
+}
 
 pub fn extract(root: Node, source: &str, file_id: &str, file_path: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();

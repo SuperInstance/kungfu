@@ -108,6 +108,16 @@ enum Commands {
         budget: String,
     },
 
+    /// Smart context retrieval: parse intent, multi-strategy search, ranked packet
+    #[command(name = "ask-context")]
+    AskContext {
+        /// Task description in natural language
+        task: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
     /// Build context from git diff
     #[command(name = "diff-context")]
     DiffContext {
@@ -159,6 +169,9 @@ fn main() {
         }
         Commands::Context { query, budget } => {
             commands::context(&query, parse_budget(&budget), json)
+        }
+        Commands::AskContext { task, budget } => {
+            commands::ask_context(&task, parse_budget(&budget), json)
         }
         Commands::DiffContext { budget } => {
             commands::diff_context(parse_budget(&budget), json)

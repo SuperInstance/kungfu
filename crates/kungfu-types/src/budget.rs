@@ -5,6 +5,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Budget {
+    Tiny,
     #[default]
     Small,
     Medium,
@@ -14,6 +15,7 @@ pub enum Budget {
 impl Budget {
     pub fn top_k(&self) -> usize {
         match self {
+            Budget::Tiny => 3,
             Budget::Small => 5,
             Budget::Medium => 8,
             Budget::Full => 12,
@@ -22,6 +24,7 @@ impl Budget {
 
     pub fn max_lines(&self) -> usize {
         match self {
+            Budget::Tiny => 0,
             Budget::Small => 20,
             Budget::Medium => 40,
             Budget::Full => 100,
@@ -32,6 +35,7 @@ impl Budget {
 impl fmt::Display for Budget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Budget::Tiny => write!(f, "tiny"),
             Budget::Small => write!(f, "small"),
             Budget::Medium => write!(f, "medium"),
             Budget::Full => write!(f, "full"),
@@ -44,10 +48,59 @@ impl FromStr for Budget {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "tiny" => Ok(Budget::Tiny),
             "small" => Ok(Budget::Small),
             "medium" => Ok(Budget::Medium),
             "full" => Ok(Budget::Full),
-            _ => Err(format!("invalid budget: '{}' (expected small, medium, full)", s)),
+            _ => Err(format!("invalid budget: '{}' (expected tiny, small, medium, full)", s)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_all_budgets() {
+        assert_eq!("tiny".parse::<Budget>().unwrap(), Budget::Tiny);
+        assert_eq!("small".parse::<Budget>().unwrap(), Budget::Small);
+        assert_eq!("medium".parse::<Budget>().unwrap(), Budget::Medium);
+        assert_eq!("full".parse::<Budget>().unwrap(), Budget::Full);
+        assert_eq!("SMALL".parse::<Budget>().unwrap(), Budget::Small);
+        assert!("invalid".parse::<Budget>().is_err());
+    }
+
+    #[test]
+    fn top_k_ordering() {
+        assert!(Budget::Tiny.top_k() < Budget::Small.top_k());
+        assert!(Budget::Small.top_k() < Budget::Medium.top_k());
+        assert!(Budget::Medium.top_k() < Budget::Full.top_k());
+    }
+
+    #[test]
+    fn max_lines_tiny_is_zero() {
+        assert_eq!(Budget::Tiny.max_lines(), 0);
+    }
+
+    #[test]
+    fn display_roundtrip() {
+        for b in [Budget::Tiny, Budget::Small, Budget::Medium, Budget::Full] {
+            assert_eq!(b.to_string().parse::<Budget>().unwrap(), b);
+        }
+    }
+
+    #[test]
+    fn serde_roundtrip() {
+        for b in [Budget::Tiny, Budget::Small, Budget::Medium, Budget::Full] {
+            let json = serde_json::to_string(&b).unwrap();
+            let parsed: Budget = serde_json::from_str(&json).unwrap();
+            assert_eq!(b, parsed);
+        }
+    }
+
+    #[test]
+    fn default_is_small() {
+        assert_eq!(Budget::default(), Budget::Small);
     }
 }

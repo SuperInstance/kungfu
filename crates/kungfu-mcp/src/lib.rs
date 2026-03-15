@@ -34,7 +34,7 @@ impl KungfuMcp {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BudgetParam {
-    /// Budget level: "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
     pub budget: Option<String>,
 }
 
@@ -48,7 +48,7 @@ pub struct FilePathParam {
 pub struct QueryParam {
     /// Search query or symbol name
     pub query: String,
-    /// Budget level: "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
     pub budget: Option<String>,
 }
 
@@ -56,7 +56,7 @@ pub struct QueryParam {
 pub struct SymbolNameParam {
     /// Exact symbol name
     pub name: String,
-    /// Budget level: "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
     pub budget: Option<String>,
 }
 
@@ -64,7 +64,7 @@ pub struct SymbolNameParam {
 pub struct FilePathBudgetParam {
     /// Path to the file (relative to project root)
     pub path: String,
-    /// Budget level: "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
     pub budget: Option<String>,
 }
 
@@ -217,7 +217,7 @@ impl KungfuMcp {
         serde_json::to_string_pretty(&items).map_err(|e| e.to_string())
     }
 
-    #[tool(description = "Find files related to the given file by directory proximity, shared symbols, test patterns, and path heuristics")]
+    #[tool(description = "Find files related to the given file by import/dependency relations, directory proximity, shared symbols, and test patterns")]
     fn find_related_files(
         &self,
         Parameters(params): Parameters<FilePathBudgetParam>,
@@ -264,6 +264,19 @@ impl KungfuMcp {
         let service = self.service()?;
         let packet = service
             .context(&params.query, budget)
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(&packet).map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Smart context retrieval: parse task intent, run multi-strategy search (symbols, text, related files, import chains), return ranked context packet")]
+    fn ask_context(
+        &self,
+        Parameters(params): Parameters<QueryParam>,
+    ) -> Result<String, String> {
+        let budget = parse_budget(params.budget.as_deref());
+        let service = self.service()?;
+        let packet = service
+            .ask_context(&params.query, budget)
             .map_err(|e| e.to_string())?;
         serde_json::to_string_pretty(&packet).map_err(|e| e.to_string())
     }

@@ -7,6 +7,22 @@ use anyhow::{bail, Result};
 use kungfu_types::file::Language;
 use kungfu_types::symbol::Symbol;
 
+/// Raw import extracted from source code.
+#[derive(Debug, Clone)]
+pub struct RawImport {
+    /// The import path as written in source (e.g. "crate::scanner", "./bar", "fmt").
+    pub path: String,
+    /// Specific names imported (e.g. ["Result", "Context"]), empty for wildcard/module imports.
+    pub names: Vec<String>,
+    /// Line number of the import statement.
+    pub line: usize,
+}
+
+pub struct ParseResult {
+    pub symbols: Vec<Symbol>,
+    pub imports: Vec<RawImport>,
+}
+
 pub struct Parser {
     ts_parser: tree_sitter::Parser,
 }
@@ -25,6 +41,16 @@ impl Parser {
         file_id: &str,
         file_path: &str,
     ) -> Result<Vec<Symbol>> {
+        Ok(self.parse(source, language, file_id, file_path)?.symbols)
+    }
+
+    pub fn parse(
+        &mut self,
+        source: &str,
+        language: Language,
+        file_id: &str,
+        file_path: &str,
+    ) -> Result<ParseResult> {
         let ts_language = match language {
             Language::Rust => tree_sitter_rust::LANGUAGE.into(),
             Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -43,16 +69,26 @@ impl Parser {
 
         let root = tree.root_node();
 
-        let symbols = match language {
-            Language::Rust => rust_parser::extract(root, source, file_id, file_path),
-            Language::TypeScript | Language::JavaScript => {
-                typescript_parser::extract(root, source, file_id, file_path)
-            }
-            Language::Python => python_parser::extract(root, source, file_id, file_path),
-            Language::Go => go_parser::extract(root, source, file_id, file_path),
-            _ => Vec::new(),
+        let (symbols, imports) = match language {
+            Language::Rust => (
+                rust_parser::extract(root, source, file_id, file_path),
+                rust_parser::extract_imports(root, source),
+            ),
+            Language::TypeScript | Language::JavaScript => (
+                typescript_parser::extract(root, source, file_id, file_path),
+                typescript_parser::extract_imports(root, source),
+            ),
+            Language::Python => (
+                python_parser::extract(root, source, file_id, file_path),
+                python_parser::extract_imports(root, source),
+            ),
+            Language::Go => (
+                go_parser::extract(root, source, file_id, file_path),
+                go_parser::extract_imports(root, source),
+            ),
+            _ => (Vec::new(), Vec::new()),
         };
 
-        Ok(symbols)
+        Ok(ParseResult { symbols, imports })
     }
 }

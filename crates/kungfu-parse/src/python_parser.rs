@@ -1,5 +1,63 @@
+use crate::RawImport;
 use kungfu_types::symbol::{Span, Symbol, SymbolKind};
 use tree_sitter::Node;
+
+pub fn extract_imports(root: Node, source: &str) -> Vec<RawImport> {
+    let mut imports = Vec::new();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        let kind = child.kind();
+        let line = child.start_position().row + 1;
+
+        if kind == "import_statement" {
+            // import foo / import foo.bar
+            let text = &source[child.start_byte()..child.end_byte()];
+            let path = text.trim_start_matches("import ").trim().to_string();
+            imports.push(RawImport {
+                path,
+                names: Vec::new(),
+                line,
+            });
+        } else if kind == "import_from_statement" {
+            // from foo.bar import Baz, Qux
+            let mut module = String::new();
+            let mut names = Vec::new();
+            let mut inner_cursor = child.walk();
+            for c in child.children(&mut inner_cursor) {
+                match c.kind() {
+                    "dotted_name" | "relative_import" if module.is_empty() => {
+                        module = node_text(c, source);
+                    }
+                    _ => {
+                        // Look for imported names
+                        if c.kind() == "dotted_name" || c.kind() == "aliased_import" {
+                            let name = if c.kind() == "aliased_import" {
+                                c.child_by_field_name("name")
+                                    .map(|n| node_text(n, source))
+                                    .unwrap_or_default()
+                            } else {
+                                node_text(c, source)
+                            };
+                            if !name.is_empty() && name != module {
+                                names.push(name);
+                            }
+                        }
+                    }
+                }
+            }
+            if !module.is_empty() {
+                imports.push(RawImport {
+                    path: module,
+                    names,
+                    line,
+                });
+            }
+        }
+    }
+
+    imports
+}
 
 pub fn extract(root: Node, source: &str, file_id: &str, file_path: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();

@@ -167,6 +167,62 @@ pub fn doctor(json: bool) -> Result<()> {
                     },
                 ));
 
+                // Relations
+                let relations_path = index_dir.join("relations.json");
+                if relations_path.exists() {
+                    let rel_count = std::fs::read_to_string(&relations_path)
+                        .ok()
+                        .and_then(|c| {
+                            serde_json::from_str::<Vec<serde_json::Value>>(&c)
+                                .ok()
+                                .map(|v| v.len())
+                        })
+                        .unwrap_or(0);
+                    checks.push((
+                        "index_relations",
+                        rel_count > 0,
+                        format!("{} relations (imports, tests, configs)", rel_count),
+                    ));
+                } else {
+                    checks.push(("index_relations", false, "no relations — reindex with 'kungfu index --full'".into()));
+                }
+
+                // Symbol coverage: % of code files that have symbols
+                if has_files && has_symbols {
+                    let file_count = std::fs::read_to_string(&files_path)
+                        .ok()
+                        .and_then(|c| serde_json::from_str::<Vec<serde_json::Value>>(&c).ok())
+                        .unwrap_or_default();
+                    let sym_data = std::fs::read_to_string(&symbols_path)
+                        .ok()
+                        .and_then(|c| serde_json::from_str::<Vec<serde_json::Value>>(&c).ok())
+                        .unwrap_or_default();
+
+                    let code_files: std::collections::HashSet<String> = file_count
+                        .iter()
+                        .filter(|f| {
+                            let lang = f.get("language").and_then(|l| l.as_str()).unwrap_or("");
+                            matches!(lang, "rust" | "typescript" | "javascript" | "python" | "go")
+                        })
+                        .filter_map(|f| f.get("id").and_then(|id| id.as_str()).map(String::from))
+                        .collect();
+
+                    let files_with_symbols: std::collections::HashSet<String> = sym_data
+                        .iter()
+                        .filter_map(|s| s.get("file_id").and_then(|id| id.as_str()).map(String::from))
+                        .collect();
+
+                    let covered = code_files.intersection(&files_with_symbols).count();
+                    let total = code_files.len();
+                    let pct = if total > 0 { covered * 100 / total } else { 0 };
+
+                    checks.push((
+                        "symbol_coverage",
+                        pct >= 50,
+                        format!("{}/{}  code files have symbols ({}%)", covered, total, pct),
+                    ));
+                }
+
                 // Directories
                 let dirs = ["cache", "logs", "state"];
                 for dir in &dirs {
@@ -614,6 +670,45 @@ pub fn context(query: &str, budget: Budget, json: bool) -> Result<()> {
             );
             if let Some(ref sig) = item.signature {
                 println!("        sig: {}", sig);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn ask_context(task: &str, budget: Budget, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let packet = service.ask_context(task, budget)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&packet)?);
+    } else {
+        println!("Task:   {}", packet.query);
+        if let Some(ref intent) = packet.intent {
+            println!("Intent: {}", intent);
+        }
+        println!("Budget: {}", packet.budget);
+        println!("Items:  {}", packet.items.len());
+        println!();
+        for item in &packet.items {
+            println!(
+                "  {:.2}  [{}] {} — {}",
+                item.score, item.path, item.name, item.why
+            );
+            if let Some(ref sig) = item.signature {
+                println!("        sig: {}", sig);
+            }
+            if let Some(ref snippet) = item.snippet {
+                println!("        ---");
+                for line in snippet.lines().take(10) {
+                    println!("        {}", line);
+                }
+                let total = snippet.lines().count();
+                if total > 10 {
+                    println!("        ... ({} more lines)", total - 10);
+                }
+                println!();
             }
         }
     }

@@ -1,5 +1,57 @@
+use crate::RawImport;
 use kungfu_types::symbol::{Span, Symbol, SymbolKind};
 use tree_sitter::Node;
+
+pub fn extract_imports(root: Node, source: &str) -> Vec<RawImport> {
+    let mut imports = Vec::new();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        if child.kind() == "use_declaration" {
+            let line = child.start_position().row + 1;
+            let text = &source[child.start_byte()..child.end_byte()];
+            // Parse "use path::to::module;" or "use path::to::{A, B};"
+            let trimmed = text
+                .trim_start_matches("use ")
+                .trim_end_matches(';')
+                .trim();
+
+            if let Some(brace_pos) = trimmed.find('{') {
+                // use path::{A, B}
+                let base = trimmed[..brace_pos].trim_end_matches(':').trim_end_matches(':');
+                let names_str = &trimmed[brace_pos + 1..trimmed.len().saturating_sub(1)];
+                let names: Vec<String> = names_str
+                    .split(',')
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty())
+                    .collect();
+                imports.push(RawImport {
+                    path: base.to_string(),
+                    names,
+                    line,
+                });
+            } else {
+                // use path::to::Thing or use path::to::*
+                let parts: Vec<&str> = trimmed.rsplitn(2, "::").collect();
+                if parts.len() == 2 {
+                    imports.push(RawImport {
+                        path: parts[1].to_string(),
+                        names: vec![parts[0].to_string()],
+                        line,
+                    });
+                } else {
+                    imports.push(RawImport {
+                        path: trimmed.to_string(),
+                        names: Vec::new(),
+                        line,
+                    });
+                }
+            }
+        }
+    }
+
+    imports
+}
 
 pub fn extract(root: Node, source: &str, file_id: &str, file_path: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
@@ -172,5 +224,60 @@ fn node_span(node: &Node) -> Span {
         end_line: node.end_position().row + 1,
         start_col: node.start_position().column,
         end_col: node.end_position().column,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_imports(source: &str) -> Vec<RawImport> {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        extract_imports(tree.root_node(), source)
+    }
+
+    #[test]
+    fn simple_use() {
+        let imports = parse_imports("use std::path::Path;");
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "std::path");
+        assert_eq!(imports[0].names, vec!["Path"]);
+    }
+
+    #[test]
+    fn grouped_use() {
+        let imports = parse_imports("use std::collections::{HashMap, HashSet};");
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "std::collections");
+        assert!(imports[0].names.contains(&"HashMap".to_string()));
+        assert!(imports[0].names.contains(&"HashSet".to_string()));
+    }
+
+    #[test]
+    fn crate_use() {
+        let imports = parse_imports("use crate::scanner;");
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "crate");
+        assert_eq!(imports[0].names, vec!["scanner"]);
+    }
+
+    #[test]
+    fn multiple_uses() {
+        let source = "use std::path::Path;\nuse std::io::Result;\n";
+        let imports = parse_imports(source);
+        assert_eq!(imports.len(), 2);
+    }
+
+    #[test]
+    fn extracts_symbols() {
+        let source = "pub fn hello() {}\nstruct Foo {}";
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let symbols = extract(tree.root_node(), source, "f:test", "test.rs");
+        assert!(symbols.iter().any(|s| s.name == "hello"));
+        assert!(symbols.iter().any(|s| s.name == "Foo"));
     }
 }

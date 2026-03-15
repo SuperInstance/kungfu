@@ -7,27 +7,72 @@ pub fn build_context_packet(
     symbols: Vec<(Symbol, f64)>,
     budget: Budget,
 ) -> ContextPacket {
-    let top_k = budget.top_k();
+    build_context_packet_with_intent(query, symbols, budget, None)
+}
 
-    let mut items: Vec<ContextItem> = symbols
+/// Scored symbol with a reason string for context packet.
+pub struct ScoredSymbol {
+    pub symbol: Symbol,
+    pub score: f64,
+    pub reason: String,
+}
+
+pub fn build_context_packet_with_intent(
+    query: &str,
+    symbols: Vec<(Symbol, f64)>,
+    budget: Budget,
+    intent: Option<kungfu_types::context::Intent>,
+) -> ContextPacket {
+    let scored: Vec<ScoredSymbol> = symbols
         .into_iter()
-        .take(top_k)
-        .map(|(sym, score)| ContextItem {
-            item_type: ContextItemType::Symbol,
-            path: sym.path,
-            name: sym.name,
-            signature: sym.signature,
-            why: format!("matched query with score {:.2}", score),
+        .map(|(sym, score)| ScoredSymbol {
+            symbol: sym,
             score,
-            snippet: None,
+            reason: String::new(),
         })
         .collect();
+    build_context_packet_full(query, scored, budget, intent)
+}
 
-    items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+pub fn build_context_packet_full(
+    query: &str,
+    mut symbols: Vec<ScoredSymbol>,
+    budget: Budget,
+    intent: Option<kungfu_types::context::Intent>,
+) -> ContextPacket {
+    let top_k = budget.top_k();
+
+    // Sort by score descending
+    symbols.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Deduplicate by (path, name) — keep highest-scored entry
+    let mut seen = std::collections::HashSet::new();
+    let items: Vec<ContextItem> = symbols
+        .into_iter()
+        .filter(|s| seen.insert((s.symbol.path.clone(), s.symbol.name.clone())))
+        .take(top_k)
+        .map(|s| {
+            let why = if s.reason.is_empty() {
+                format!("score {:.2}", s.score)
+            } else {
+                s.reason
+            };
+            ContextItem {
+                item_type: ContextItemType::Symbol,
+                path: s.symbol.path,
+                name: s.symbol.name,
+                signature: s.symbol.signature,
+                why,
+                score: s.score,
+                snippet: None,
+            }
+        })
+        .collect();
 
     ContextPacket {
         query: query.to_string(),
         budget,
+        intent,
         items,
     }
 }

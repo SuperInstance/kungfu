@@ -1,5 +1,73 @@
+use crate::RawImport;
 use kungfu_types::symbol::{Span, Symbol, SymbolKind};
 use tree_sitter::Node;
+
+pub fn extract_imports(root: Node, source: &str) -> Vec<RawImport> {
+    let mut imports = Vec::new();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        if child.kind() == "import_statement" {
+            let line = child.start_position().row + 1;
+            // Extract the source string (the "from" path)
+            if let Some(source_node) = child.child_by_field_name("source") {
+                let path = node_text(source_node, source)
+                    .trim_matches('\'')
+                    .trim_matches('"')
+                    .to_string();
+
+                // Extract imported names
+                let mut names = Vec::new();
+                let mut inner_cursor = child.walk();
+                for c in child.children(&mut inner_cursor) {
+                    if c.kind() == "import_clause" {
+                        collect_import_names(c, source, &mut names);
+                    }
+                }
+
+                imports.push(RawImport { path, names, line });
+            }
+        }
+        // Handle require() calls: const x = require('...')
+        if child.kind() == "lexical_declaration" || child.kind() == "variable_declaration" {
+            let text = &source[child.start_byte()..child.end_byte()];
+            if let Some(start) = text.find("require(") {
+                let after = &text[start + 8..];
+                if let Some(end) = after.find(')') {
+                    let path = after[..end]
+                        .trim_matches('\'')
+                        .trim_matches('"')
+                        .to_string();
+                    imports.push(RawImport {
+                        path,
+                        names: Vec::new(),
+                        line: child.start_position().row + 1,
+                    });
+                }
+            }
+        }
+    }
+
+    imports
+}
+
+fn collect_import_names(node: Node, source: &str, names: &mut Vec<String>) {
+    let kind = node.kind();
+    if kind == "identifier" {
+        names.push(node_text(node, source));
+        return;
+    }
+    if kind == "import_specifier" {
+        if let Some(name) = node.child_by_field_name("name") {
+            names.push(node_text(name, source));
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_import_names(child, source, names);
+    }
+}
 
 pub fn extract(root: Node, source: &str, file_id: &str, file_path: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
