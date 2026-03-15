@@ -350,19 +350,27 @@ impl KungfuService {
             });
         }
 
-        // Strategy B: text/file search
+        // Strategy B: text/file search — only add keyword-relevant symbols
         let file_results = search.search_text(&keyword_query, Budget::Full)?;
         let all_symbols = search.get_all_symbols()?;
         for fr in &file_results {
             let file_syms: Vec<_> = all_symbols
                 .iter()
                 .filter(|s| s.file_id == fr.item.id && !seen_ids.contains(&s.id))
+                .filter(|s| {
+                    let name_lower = s.name.to_lowercase();
+                    let sig_lower = s.signature.as_deref().unwrap_or("").to_lowercase();
+                    keywords
+                        .iter()
+                        .any(|kw| name_lower.contains(*kw) || sig_lower.contains(*kw))
+                })
+                .take(3)
                 .collect();
             for sym in file_syms {
                 seen_ids.insert(sym.id.clone());
                 scored_symbols.push(ScoredSymbol {
                     symbol: sym.clone(),
-                    score: fr.score * 0.6,
+                    score: fr.score * 0.7,
                     reason: format!("in matched file {}", fr.item.path),
                 });
             }
@@ -370,40 +378,66 @@ impl KungfuService {
 
         // Strategy C: sibling symbols from top match's file (important for impact/understand)
         if matches!(intent, Intent::Impact | Intent::Understand) {
-            // Only use the file of the HIGHEST scoring direct match
             if let Some(top) = scored_symbols
                 .iter()
                 .filter(|s| s.reason == "symbol name match")
                 .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))
             {
                 let top_file_id = top.symbol.file_id.clone();
+                let top_score = top.score;
 
-                // Boost existing symbols from that file
+                // Add new siblings, scored by keyword relevance
+                let mut siblings: Vec<_> = all_symbols
+                    .iter()
+                    .filter(|s| s.file_id == top_file_id && !seen_ids.contains(&s.id))
+                    .map(|s| {
+                        let name_lower = s.name.to_lowercase();
+                        let sig_lower = s.signature.as_deref().unwrap_or("").to_lowercase();
+                        let relevance: usize = keywords
+                            .iter()
+                            .filter(|kw| name_lower.contains(*kw) || sig_lower.contains(*kw))
+                            .count();
+                        (s, relevance)
+                    })
+                    .collect();
+                siblings.sort_by(|a, b| {
+                    b.1.cmp(&a.1)
+                        .then_with(|| b.0.exported.cmp(&a.0.exported))
+                });
+                // Impact/understand: allow more siblings since we want the full picture
+                let max_siblings = if intent == Intent::Impact { 5 } else { 3 };
+                for (sym, relevance) in siblings.iter().take(max_siblings) {
+                    seen_ids.insert(sym.id.clone());
+                    // Relevant siblings score close to the match; irrelevant ones much lower
+                    let score = if *relevance > 0 {
+                        top_score * 0.9
+                    } else {
+                        top_score * 0.4
+                    };
+                    scored_symbols.push(ScoredSymbol {
+                        symbol: (*sym).clone(),
+                        score,
+                        reason: "same file as matched symbol".to_string(),
+                    });
+                }
+
+                // Also boost existing symbols from that file if keyword-relevant
                 for s in &mut scored_symbols {
-                    if s.symbol.file_id == top_file_id && s.reason != "symbol name match" {
-                        if s.score < 0.55 {
-                            s.score = 0.55;
+                    if s.symbol.file_id == top_file_id
+                        && s.reason != "symbol name match"
+                        && s.reason != "same file as matched symbol"
+                    {
+                        let name_lower = s.symbol.name.to_lowercase();
+                        let sig_lower =
+                            s.symbol.signature.as_deref().unwrap_or("").to_lowercase();
+                        let is_relevant = keywords
+                            .iter()
+                            .any(|kw| name_lower.contains(*kw) || sig_lower.contains(*kw));
+                        if is_relevant && s.score < top_score * 0.9 {
+                            s.score = top_score * 0.9;
                             s.reason = "same file as matched symbol".to_string();
                         }
                     }
-                }
-                // Add new siblings, limited to 5 per file
-                let mut added = 0;
-                let siblings: Vec<_> = all_symbols
-                    .iter()
-                    .filter(|s| s.file_id == top_file_id && !seen_ids.contains(&s.id))
-                    .collect();
-                for sym in siblings {
-                    if added >= 5 {
-                        break;
-                    }
-                    seen_ids.insert(sym.id.clone());
-                    scored_symbols.push(ScoredSymbol {
-                        symbol: sym.clone(),
-                        score: 0.55,
-                        reason: "same file as matched symbol".to_string(),
-                    });
-                    added += 1;
                 }
             }
         }

@@ -327,6 +327,12 @@ fn score_symbol_match(name: &str, query: &str) -> f64 {
             return 0.6;
         }
     }
+    // Short root: "authentication" → "auth" matches "useAuthStore"
+    if let Some(root) = short_root(query) {
+        if name_lower.contains(&root) {
+            return 0.5;
+        }
+    }
     // Reverse: query "rank" matches name "ranking"
     if let Some(stem) = simple_stem(&name_lower) {
         if stem.contains(query) || query.contains(&stem) {
@@ -379,7 +385,18 @@ fn score_symbol_multi_word(sym: &Symbol, words: &[&str]) -> f64 {
 
     let mut matched = 0;
     for word in words {
-        if name_lower.contains(word) || sig_lower.contains(word) || path_lower.contains(word) {
+        let direct = name_lower.contains(word)
+            || sig_lower.contains(word)
+            || path_lower.contains(word);
+        let via_stem = !direct
+            && (simple_stem(word)
+                .map_or(false, |s| {
+                    name_lower.contains(&s) || sig_lower.contains(&s) || path_lower.contains(&s)
+                })
+                || short_root(word).map_or(false, |r| {
+                    name_lower.contains(&r) || sig_lower.contains(&r) || path_lower.contains(&r)
+                }));
+        if direct || via_stem {
             matched += 1;
         }
     }
@@ -390,8 +407,13 @@ fn score_symbol_multi_word(sym: &Symbol, words: &[&str]) -> f64 {
 
     let ratio = matched as f64 / words.len() as f64;
 
-    // Boost if name directly matches
-    if words.iter().any(|w| name_lower.contains(w)) {
+    // Boost if name directly matches (including via stem)
+    let name_matches = words.iter().any(|w| {
+        name_lower.contains(w)
+            || simple_stem(w).map_or(false, |s| name_lower.contains(&s))
+            || short_root(w).map_or(false, |r| name_lower.contains(&r))
+    });
+    if name_matches {
         ratio * 0.9
     } else {
         ratio * 0.6
@@ -456,7 +478,7 @@ fn simple_stem(word: &str) -> Option<String> {
     if word.len() < 5 {
         return None;
     }
-    for suffix in &["ing", "tion", "sion", "ment", "ness", "ity", "able", "ible", "ous", "ive", "er", "ed", "es", "ly", "al", "ful", "less", "ize", "ise"] {
+    for suffix in &["ing", "tion", "sion", "ment", "ness", "ity", "able", "ible", "ous", "ive", "er", "ed", "es", "ly", "al", "ful", "less", "ize", "ise", "ation", "icate", "ication"] {
         if let Some(stem) = word.strip_suffix(suffix) {
             if stem.len() >= 3 {
                 return Some(stem.to_string());
@@ -464,6 +486,35 @@ fn simple_stem(word: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Extract a short prefix root for long words (e.g. "authentication" → "auth").
+/// Useful when full stem is still too long to match abbreviations in code.
+fn short_root(word: &str) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() < 8 {
+        return None;
+    }
+    // Only for ASCII words (avoids UTF-8 boundary issues)
+    if !word.is_ascii() {
+        return None;
+    }
+    // Try common roots by cutting at consonant-vowel boundary
+    for len in [4, 5, 6] {
+        if len < chars.len() && is_vowel(chars[len]) != is_vowel(chars[len - 1]) {
+            return Some(chars[..len].iter().collect());
+        }
+    }
+    // Fallback: first 4 chars if word is long enough
+    if chars.len() >= 10 {
+        Some(chars[..4].iter().collect())
+    } else {
+        None
+    }
+}
+
+fn is_vowel(c: char) -> bool {
+    matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')
 }
 
 /// Check if the query suggests interest in test files.
