@@ -642,6 +642,48 @@ impl KungfuService {
             }
         }
 
+        // Path/directory boost: if keyword matches a directory or filename, boost those symbols
+        for s in &mut scored_symbols {
+            let path_lower = s.symbol.path.to_lowercase();
+            let path_match = keywords.iter().any(|kw| {
+                kw.len() >= 3 && path_lower.split('/').any(|seg| {
+                    seg.contains(kw) || seg.trim_end_matches(".ts").trim_end_matches(".js")
+                        .trim_end_matches(".rs").trim_end_matches(".py").trim_end_matches(".go")
+                        .contains(kw)
+                })
+            });
+            if path_match {
+                s.score += 0.15;
+                if !s.reason.contains("path match") {
+                    s.reason = format!("{}, path match", s.reason);
+                }
+            }
+        }
+
+        // File-level fallback: if best symbol score is weak, inject file-level results
+        let best_score = scored_symbols.iter().map(|s| s.score).fold(0.0f64, f64::max);
+        if best_score < 0.6 {
+            for fr in &file_results {
+                let path_lower = fr.item.path.to_lowercase();
+                let path_match = keywords.iter().any(|kw| kw.len() >= 3 && path_lower.contains(kw));
+                if path_match && !seen_ids.contains(&fr.item.id) {
+                    // Pick the top exported symbol from this file as representative
+                    if let Some(rep) = all_symbols
+                        .iter()
+                        .filter(|s| s.file_id == fr.item.id && !seen_ids.contains(&s.id))
+                        .max_by_key(|s| (s.exported as u8, s.span.end_line - s.span.start_line))
+                    {
+                        seen_ids.insert(rep.id.clone());
+                        scored_symbols.push(ScoredSymbol {
+                            symbol: rep.clone(),
+                            score: 0.55,
+                            reason: format!("file path match: {}", fr.item.path),
+                        });
+                    }
+                }
+            }
+        }
+
         // Language importance weighting
         if let Some(ref primary) = primary_lang {
             for s in &mut scored_symbols {
@@ -906,6 +948,12 @@ impl KungfuService {
                             }
                         }
                         kind_rank(&a.item).cmp(&kind_rank(&b.item))
+                    })
+                    .then_with(|| {
+                        // Prefer larger symbols (class definition > getter/field)
+                        let a_size = a.item.span.end_line.saturating_sub(a.item.span.start_line);
+                        let b_size = b.item.span.end_line.saturating_sub(b.item.span.start_line);
+                        a_size.cmp(&b_size)
                     })
                     .then_with(|| a.item.exported.cmp(&b.item.exported))
             })

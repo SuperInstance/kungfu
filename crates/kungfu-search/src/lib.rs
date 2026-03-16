@@ -33,7 +33,12 @@ impl SearchEngine {
                 let score = if words.len() > 1 {
                     score_symbol_multi_word(&s, &words)
                 } else {
-                    score_symbol_match(&s.name, &query_lower)
+                    let mut sc = score_symbol_match(&s.name, &query_lower);
+                    // Exact case bonus: "DataFrame" matches "DataFrame" better than "dataFrame"
+                    if sc >= 0.99 && s.name == query {
+                        sc = 1.01;
+                    }
+                    sc
                 };
                 if score > 0.0 {
                     Some(SearchResult { item: s, score })
