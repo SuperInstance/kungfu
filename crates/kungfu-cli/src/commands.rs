@@ -486,10 +486,15 @@ pub fn file_outline(path: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn find_symbol(query: &str, budget: Budget, json: bool) -> Result<()> {
+pub fn find_symbol(query: &str, budget: Budget, scope: Option<&str>, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
-    let results = service.find_symbol(query, budget)?;
+    let mut results = service.find_symbol(query, budget)?;
+
+    // Apply scope filter
+    if let Some(scope) = scope {
+        results.retain(|r| r.item.path.starts_with(scope));
+    }
 
     if json {
         let items: Vec<_> = results
@@ -506,17 +511,15 @@ pub fn find_symbol(query: &str, budget: Budget, json: bool) -> Result<()> {
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&items)?);
+    } else if results.is_empty() {
+        println!("No symbols found for '{}'", query);
     } else {
-        if results.is_empty() {
-            println!("No symbols found for '{}'", query);
-        } else {
-            for r in &results {
-                let sig = r.item.signature.as_deref().unwrap_or(&r.item.name);
-                println!(
-                    "  {:.2}  {}:{}  {} {}",
-                    r.score, r.item.path, r.item.span.start_line, r.item.kind, sig
-                );
-            }
+        for r in &results {
+            let sig = r.item.signature.as_deref().unwrap_or(&r.item.name);
+            println!(
+                "  {:.2}  {}:{}  {} {}",
+                r.score, r.item.path, r.item.span.start_line, r.item.kind, sig
+            );
         }
     }
     Ok(())

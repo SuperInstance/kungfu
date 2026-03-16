@@ -66,6 +66,10 @@ enum Commands {
 
         #[arg(long, default_value = "small")]
         budget: String,
+
+        /// Limit results to files under this path prefix
+        #[arg(long)]
+        scope: Option<String>,
     },
 
     /// Get detailed symbol info
@@ -205,8 +209,8 @@ fn main() {
             commands::repo_outline(parse_budget(&budget), json)
         }
         Commands::FileOutline { path } => commands::file_outline(&path, json),
-        Commands::FindSymbol { query, budget } => {
-            commands::find_symbol(&query, parse_budget(&budget), json)
+        Commands::FindSymbol { query, budget, scope } => {
+            commands::find_symbol(&query, parse_budget(&budget), scope.as_deref(), json)
         }
         Commands::GetSymbol { name, budget } => {
             commands::get_symbol(&name, parse_budget(&budget), json)

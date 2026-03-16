@@ -1215,11 +1215,76 @@ fn extract_keyword_lines(
                 result.push("    ...".to_string());
             }
         }
-        result.push(lines[i].clone());
+        // Highlight keyword lines with >>> marker
+        if hit_indices.contains(&i) {
+            result.push(format!(">>> {}", highlight_keywords(&lines[i], keywords)));
+        } else {
+            result.push(lines[i].clone());
+        }
         prev = Some(i);
     }
 
     result.join("\n")
+}
+
+/// Highlight keyword occurrences in a line by wrapping them with «» markers.
+fn highlight_keywords(line: &str, keywords: &[&str]) -> String {
+    use kungfu_search::simple_stem;
+
+    let line_lower = line.to_lowercase();
+    // Collect all match positions (start, end) in the original line
+    let mut matches: Vec<(usize, usize)> = Vec::new();
+
+    for kw in keywords {
+        // Find all occurrences of keyword (case-insensitive)
+        let mut pos = 0;
+        while let Some(idx) = line_lower[pos..].find(kw) {
+            let start = pos + idx;
+            let end = start + kw.len();
+            matches.push((start, end));
+            pos = end;
+        }
+        // Also try stem
+        if let Some(stem) = simple_stem(kw) {
+            pos = 0;
+            while let Some(idx) = line_lower[pos..].find(&stem) {
+                let start = pos + idx;
+                let end = start + stem.len();
+                matches.push((start, end));
+                pos = end;
+            }
+        }
+    }
+
+    if matches.is_empty() {
+        return line.to_string();
+    }
+
+    // Sort by start position and merge overlapping ranges
+    matches.sort_by_key(|&(s, _)| s);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in matches {
+        if let Some(last) = merged.last_mut() {
+            if s <= last.1 {
+                last.1 = last.1.max(e);
+                continue;
+            }
+        }
+        merged.push((s, e));
+    }
+
+    // Build highlighted string
+    let mut result = String::with_capacity(line.len() + merged.len() * 4);
+    let mut cursor = 0;
+    for (s, e) in &merged {
+        result.push_str(&line[cursor..*s]);
+        result.push('«');
+        result.push_str(&line[*s..*e]);
+        result.push('»');
+        cursor = *e;
+    }
+    result.push_str(&line[cursor..]);
+    result
 }
 
 fn detect_primary_language(files: &[FileEntry]) -> Option<String> {
