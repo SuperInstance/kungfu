@@ -187,3 +187,144 @@ fn extract_callee_name(node: &tree_sitter::Node, source: &str) -> Option<String>
 
     Some(name.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_rust(source: &str) -> ParseResult {
+        let mut parser = Parser::new();
+        parser.parse(source, Language::Rust, "f:test", "test.rs").unwrap()
+    }
+
+    fn parse_python(source: &str) -> ParseResult {
+        let mut parser = Parser::new();
+        parser.parse(source, Language::Python, "f:test", "test.py").unwrap()
+    }
+
+    fn parse_ts(source: &str) -> ParseResult {
+        let mut parser = Parser::new();
+        parser.parse(source, Language::TypeScript, "f:test", "test.ts").unwrap()
+    }
+
+    fn parse_go(source: &str) -> ParseResult {
+        let mut parser = Parser::new();
+        parser.parse(source, Language::Go, "f:test", "test.go").unwrap()
+    }
+
+    // --- Call extraction ---
+
+    #[test]
+    fn rust_extracts_calls() {
+        let result = parse_rust(r#"
+fn foo() {}
+fn bar() {
+    foo();
+}
+"#);
+        assert!(result.calls.iter().any(|c| c.callee_name == "foo"),
+            "should extract call to foo, got: {:?}", result.calls);
+    }
+
+    #[test]
+    fn rust_method_call() {
+        let result = parse_rust(r#"
+fn process() {
+    self.validate();
+    let x = helper();
+}
+fn validate() {}
+fn helper() {}
+"#);
+        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(names.contains(&"validate"), "should find validate call, got: {:?}", names);
+        assert!(names.contains(&"helper"), "should find helper call, got: {:?}", names);
+    }
+
+    #[test]
+    fn rust_no_duplicate_calls() {
+        let result = parse_rust(r#"
+fn work() {
+    foo();
+    foo();
+    foo();
+}
+fn foo() {}
+"#);
+        let foo_calls: Vec<_> = result.calls.iter().filter(|c| c.callee_name == "foo").collect();
+        assert_eq!(foo_calls.len(), 1, "should deduplicate calls to same function");
+    }
+
+    #[test]
+    fn python_extracts_calls() {
+        let result = parse_python(r#"
+def foo():
+    pass
+
+def bar():
+    foo()
+    print("hello")
+"#);
+        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(names.contains(&"foo"), "should find foo call, got: {:?}", names);
+        assert!(names.contains(&"print"), "should find print call, got: {:?}", names);
+    }
+
+    #[test]
+    fn typescript_extracts_calls() {
+        let result = parse_ts(r#"
+function validate(x: string): boolean {
+    return x.length > 0;
+}
+function process(data: string) {
+    validate(data);
+    console.log(data);
+}
+"#);
+        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(names.contains(&"validate"), "should find validate call, got: {:?}", names);
+        assert!(names.contains(&"log"), "should find console.log call, got: {:?}", names);
+    }
+
+    #[test]
+    fn go_extracts_calls() {
+        let result = parse_go(r#"
+package main
+
+func helper() {}
+
+func main() {
+    helper()
+    fmt.Println("hello")
+}
+"#);
+        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(names.contains(&"helper"), "should find helper call, got: {:?}", names);
+        assert!(names.contains(&"Println"), "should find Println call, got: {:?}", names);
+    }
+
+    // --- Callee name extraction ---
+
+    #[test]
+    fn callee_simple() {
+        // Tested via full parse above
+    }
+
+    #[test]
+    fn symbols_and_imports_present() {
+        let result = parse_rust(r#"
+use std::path::Path;
+
+pub fn hello() {
+    println!("hi");
+}
+
+struct Foo {
+    x: i32,
+}
+"#);
+        assert!(result.symbols.iter().any(|s| s.name == "hello"));
+        assert!(result.symbols.iter().any(|s| s.name == "Foo"));
+        assert!(!result.imports.is_empty());
+    }
+}

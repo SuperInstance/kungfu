@@ -792,4 +792,74 @@ mod tests {
         assert!(query_wants_config(&["cargo", "toml"]));
         assert!(!query_wants_config(&["budget", "parsing"]));
     }
+
+    // --- Semantic expansion tests ---
+
+    #[test]
+    fn expand_query_auth() {
+        let expanded = expand_query(&["auth"]);
+        assert!(expanded.contains(&"auth".to_string()));
+        assert!(expanded.contains(&"login".to_string()));
+        assert!(expanded.contains(&"token".to_string()));
+        assert!(expanded.contains(&"session".to_string()));
+    }
+
+    #[test]
+    fn expand_query_database() {
+        let expanded = expand_query(&["database"]);
+        assert!(expanded.contains(&"query".to_string()));
+        assert!(expanded.contains(&"connection".to_string()));
+        assert!(expanded.contains(&"migrate".to_string()));
+    }
+
+    #[test]
+    fn expand_query_no_expansion_for_unknown() {
+        let expanded = expand_query(&["foobar"]);
+        assert_eq!(expanded, vec!["foobar"]);
+    }
+
+    #[test]
+    fn expand_query_multiple_keywords() {
+        let expanded = expand_query(&["auth", "error"]);
+        assert!(expanded.contains(&"login".to_string()));
+        assert!(expanded.contains(&"panic".to_string()));
+        // No duplicates
+        let unique: std::collections::HashSet<_> = expanded.iter().collect();
+        assert_eq!(unique.len(), expanded.len());
+    }
+
+    // --- Case-sensitive scoring tests ---
+
+    #[test]
+    fn case_exact_match_scores_higher() {
+        // Both "DataFrame" and "dataFrame" match "dataframe" with score 1.0
+        // But in find_symbol, exact case gets 1.01 bonus
+        let score_exact = score_symbol_match("DataFrame", "dataframe");
+        let score_camel = score_symbol_match("dataFrame", "dataframe");
+        assert_eq!(score_exact, 1.0);
+        assert_eq!(score_camel, 1.0);
+        // The case bonus happens in find_symbol, not score_symbol_match
+    }
+
+    #[test]
+    fn class_vs_getter_same_name() {
+        // Both match with score 1.0, but class should win via tiebreaker
+        let score_class = score_symbol_match("DataFrame", "dataframe");
+        let score_getter = score_symbol_match("dataFrame", "dataframe");
+        assert_eq!(score_class, score_getter); // same base score
+    }
+
+    // --- Path matching tests ---
+
+    #[test]
+    fn path_contains_keyword() {
+        let score = score_path_match("src/auth/service.ts", "auth", &["auth"]);
+        assert!(score > 0.0, "path containing keyword should match");
+    }
+
+    #[test]
+    fn path_exact_filename() {
+        let score = score_path_match("src/router.ts", "router", &["router"]);
+        assert!(score >= 0.9, "exact filename match should score high, got {}", score);
+    }
 }

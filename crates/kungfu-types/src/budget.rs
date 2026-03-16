@@ -122,4 +122,28 @@ mod tests {
     fn default_is_small() {
         assert_eq!(Budget::default(), Budget::Small);
     }
+
+    #[test]
+    fn auto_resolve_small_project() {
+        assert_eq!(Budget::Auto.resolve(50), Budget::Medium);
+        assert_eq!(Budget::Auto.resolve(100), Budget::Medium);
+    }
+
+    #[test]
+    fn auto_resolve_large_project() {
+        assert_eq!(Budget::Auto.resolve(500), Budget::Small);
+        assert_eq!(Budget::Auto.resolve(10000), Budget::Small);
+    }
+
+    #[test]
+    fn explicit_budget_not_resolved() {
+        assert_eq!(Budget::Tiny.resolve(50), Budget::Tiny);
+        assert_eq!(Budget::Full.resolve(50000), Budget::Full);
+    }
+
+    #[test]
+    fn auto_parse_and_display() {
+        assert_eq!("auto".parse::<Budget>().unwrap(), Budget::Auto);
+        assert_eq!(Budget::Auto.to_string(), "auto");
+    }
 }
