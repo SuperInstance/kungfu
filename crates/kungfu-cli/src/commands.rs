@@ -750,6 +750,163 @@ pub fn diff_context(budget: Budget, json: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn explore_symbol(name: &str, budget: Budget, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.explore_symbol(name, budget)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        // Compact text output
+        if let Some(err) = result.get("error") {
+            println!("{}", err.as_str().unwrap_or("not found"));
+            return Ok(());
+        }
+        if let Some(sym) = result.get("symbol") {
+            println!(
+                "{} ({}) at {}:{}",
+                sym["name"].as_str().unwrap_or(""),
+                sym["kind"].as_str().unwrap_or(""),
+                sym["path"].as_str().unwrap_or(""),
+                sym["line"].as_u64().unwrap_or(0),
+            );
+            if let Some(sig) = sym.get("signature").and_then(|s| s.as_str()) {
+                println!("  sig: {}", sig);
+            }
+        }
+        if let Some(snippet) = result.get("snippet").and_then(|s| s.as_str()) {
+            println!("  ---");
+            for line in snippet.lines().take(15) {
+                println!("  {}", line);
+            }
+        }
+        if let Some(siblings) = result.get("siblings_in_file").and_then(|s| s.as_array()) {
+            if !siblings.is_empty() {
+                println!();
+                println!("  Siblings:");
+                for s in siblings {
+                    println!(
+                        "    L{} {} {}",
+                        s["line"].as_u64().unwrap_or(0),
+                        s["kind"].as_str().unwrap_or(""),
+                        s["name"].as_str().unwrap_or(""),
+                    );
+                }
+            }
+        }
+        if let Some(others) = result.get("other_matches").and_then(|s| s.as_array()) {
+            if !others.is_empty() {
+                println!();
+                println!("  Other matches:");
+                for o in others {
+                    println!(
+                        "    {:.2}  {}:{}  {}",
+                        o["score"].as_f64().unwrap_or(0.0),
+                        o["path"].as_str().unwrap_or(""),
+                        o["line"].as_u64().unwrap_or(0),
+                        o["name"].as_str().unwrap_or(""),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn explore_file(path: &str, budget: Budget, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.explore_file(path, budget)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!(
+            "{} ({}) — {} symbols",
+            result["path"].as_str().unwrap_or(""),
+            result["language"].as_str().unwrap_or("unknown"),
+            result["total_symbols"].as_u64().unwrap_or(0),
+        );
+        if let Some(syms) = result.get("key_symbols").and_then(|s| s.as_array()) {
+            println!();
+            println!("Key symbols:");
+            for s in syms {
+                let exported = if s["exported"].as_bool().unwrap_or(false) { " [pub]" } else { "" };
+                if let Some(sig) = s.get("signature").and_then(|v| v.as_str()) {
+                    println!("  L{} {} {}{}", s["line"].as_u64().unwrap_or(0), s["kind"].as_str().unwrap_or(""), sig, exported);
+                } else {
+                    println!("  L{} {} {}{}", s["line"].as_u64().unwrap_or(0), s["kind"].as_str().unwrap_or(""), s["name"].as_str().unwrap_or(""), exported);
+                }
+            }
+        }
+        if let Some(related) = result.get("related_files").and_then(|s| s.as_array()) {
+            if !related.is_empty() {
+                println!();
+                println!("Related files:");
+                for r in related {
+                    println!(
+                        "  {:.2}  {} ({})",
+                        r["score"].as_f64().unwrap_or(0.0),
+                        r["path"].as_str().unwrap_or(""),
+                        r["language"].as_str().unwrap_or("?"),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn investigate(query: &str, budget: Budget, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.investigate(query, budget)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("Query:  {}", result["query"].as_str().unwrap_or(""));
+        if let Some(intent) = result.get("intent").and_then(|i| i.as_str()) {
+            println!("Intent: {}", intent);
+        }
+        println!("Budget: {}", result["budget"].as_str().unwrap_or(""));
+
+        if let Some(diff) = result.get("diff") {
+            println!(
+                "Diff:   {} changed files ({} relevant)",
+                diff["total_changed_files"].as_u64().unwrap_or(0),
+                diff.get("relevant_changed_files")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0),
+            );
+        }
+
+        if let Some(items) = result.get("items").and_then(|i| i.as_array()) {
+            println!("Items:  {}", items.len());
+            println!();
+            for item in items {
+                println!(
+                    "  {:.2}  [{}] {} — {}",
+                    item["score"].as_f64().unwrap_or(0.0),
+                    item["path"].as_str().unwrap_or(""),
+                    item["name"].as_str().unwrap_or(""),
+                    item["why"].as_str().unwrap_or(""),
+                );
+                if let Some(snippet) = item.get("snippet").and_then(|s| s.as_str()) {
+                    println!("        ---");
+                    for line in snippet.lines().take(10) {
+                        println!("        {}", line);
+                    }
+                    println!();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn mcp() -> Result<()> {
     let cwd = env::current_dir()?;
     let root = kungfu_project::find_project_root(&cwd)?;

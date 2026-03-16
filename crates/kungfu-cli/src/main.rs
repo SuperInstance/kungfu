@@ -125,6 +125,36 @@ enum Commands {
         budget: String,
     },
 
+    /// Composite: explore a symbol — find + detail + related + snippet in one call
+    #[command(name = "explore-symbol")]
+    ExploreSymbol {
+        /// Symbol name
+        name: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Composite: explore a file — outline + related files + key symbols in one call
+    #[command(name = "explore-file")]
+    ExploreFile {
+        /// File path
+        path: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Composite: investigate a query — smart context + diff awareness in one call
+    #[command(name = "investigate")]
+    Investigate {
+        /// Natural language query
+        query: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
     /// Watch filesystem and re-index on changes
     Watch,
 
@@ -175,6 +205,15 @@ fn main() {
         }
         Commands::DiffContext { budget } => {
             commands::diff_context(parse_budget(&budget), json)
+        }
+        Commands::ExploreSymbol { name, budget } => {
+            commands::explore_symbol(&name, parse_budget(&budget), json)
+        }
+        Commands::ExploreFile { path, budget } => {
+            commands::explore_file(&path, parse_budget(&budget), json)
+        }
+        Commands::Investigate { query, budget } => {
+            commands::investigate(&query, parse_budget(&budget), json)
         }
         Commands::Watch => commands::watch(),
         Commands::Mcp => commands::mcp(),
