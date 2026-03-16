@@ -174,7 +174,7 @@ impl KungfuMcp {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BudgetParam {
-    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", "full", or "auto". Default: "auto"
     pub budget: Option<String>,
 }
 
@@ -188,7 +188,7 @@ pub struct FilePathParam {
 pub struct QueryParam {
     /// Search query or symbol name
     pub query: String,
-    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", "full", or "auto". Default: "auto" (adapts to project size)
     pub budget: Option<String>,
     /// Limit results to files under this directory path prefix (e.g. "src/", "crates/kungfu-core")
     pub scope: Option<String>,
@@ -198,7 +198,7 @@ pub struct QueryParam {
 pub struct SymbolNameParam {
     /// Exact symbol name
     pub name: String,
-    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", "full", or "auto". Default: "auto"
     pub budget: Option<String>,
 }
 
@@ -206,7 +206,7 @@ pub struct SymbolNameParam {
 pub struct FilePathBudgetParam {
     /// Path to the file (relative to project root)
     pub path: String,
-    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", "full", or "auto". Default: "auto"
     pub budget: Option<String>,
 }
 
@@ -214,14 +214,14 @@ pub struct FilePathBudgetParam {
 pub struct SymbolBudgetParam {
     /// Symbol name to explore
     pub name: String,
-    /// Budget level: "tiny", "small", "medium", or "full". Default: "small"
+    /// Budget level: "tiny", "small", "medium", "full", or "auto". Default: "auto"
     pub budget: Option<String>,
     /// Limit results to files under this directory path prefix (e.g. "src/", "crates/kungfu-core")
     pub scope: Option<String>,
 }
 
 fn parse_budget(s: Option<&str>) -> Budget {
-    s.and_then(|s| s.parse().ok()).unwrap_or(Budget::Small)
+    s.and_then(|s| s.parse().ok()).unwrap_or(Budget::Auto)
 }
 
 /// Filter a JSON array result by scope: keep only items where "path" starts with the scope prefix.

@@ -72,6 +72,15 @@ impl KungfuService {
         SearchEngine::new(self.store())
     }
 
+    /// Resolve Budget::Auto to a concrete budget based on project size.
+    pub fn resolve_budget(&self, budget: Budget) -> Budget {
+        if budget != Budget::Auto {
+            return budget;
+        }
+        let file_count = self.store().load_files().map(|f| f.len()).unwrap_or(0);
+        budget.resolve(file_count)
+    }
+
     /// Check if index is stale and auto-reindex if needed.
     /// Compares fingerprints.json mtime with project files.
     pub fn ensure_fresh_index(&self) -> Result<bool> {
@@ -190,6 +199,7 @@ impl KungfuService {
     }
 
     pub fn repo_outline(&self, budget: Budget) -> Result<RepoOutline> {
+        let budget = self.resolve_budget(budget);
         let store = self.store();
         let files = store.load_files()?;
         let symbols = store.load_symbols()?;
@@ -279,6 +289,7 @@ impl KungfuService {
     }
 
     pub fn find_symbol(&self, query: &str, budget: Budget) -> Result<Vec<SearchResult<Symbol>>> {
+        let budget = self.resolve_budget(budget);
         self.search().find_symbol(query, budget)
     }
 
@@ -287,14 +298,17 @@ impl KungfuService {
     }
 
     pub fn search_text(&self, query: &str, budget: Budget) -> Result<Vec<SearchResult<FileEntry>>> {
+        let budget = self.resolve_budget(budget);
         self.search().search_text(query, budget)
     }
 
     pub fn find_related(&self, file_path: &str, budget: Budget) -> Result<Vec<SearchResult<FileEntry>>> {
+        let budget = self.resolve_budget(budget);
         self.search().find_related(file_path, budget)
     }
 
     pub fn context(&self, query: &str, budget: Budget) -> Result<ContextPacket> {
+        let budget = self.resolve_budget(budget);
         let search = self.search();
         let query_lower = query.to_lowercase();
         let words: Vec<&str> = query_lower.split_whitespace().collect();
@@ -378,6 +392,7 @@ impl KungfuService {
     /// High-level context retrieval: parse intent, run multi-strategy search,
     /// rank with contextual signals, return compact packet.
     pub fn ask_context(&self, task: &str, budget: Budget) -> Result<ContextPacket> {
+        let budget = self.resolve_budget(budget);
         let query_lower = task.to_lowercase();
         let words: Vec<&str> = query_lower.split_whitespace().collect();
 
@@ -611,17 +626,19 @@ impl KungfuService {
         }
 
         // Changed-file bonus
-        if kungfu_git::is_git_repo(&self.project.root) {
-            if let Ok(changed) = kungfu_git::changed_files(&self.project.root) {
-                if !changed.is_empty() {
-                    for s in &mut scored_symbols {
-                        if changed.iter().any(|c| {
-                            s.symbol.path.ends_with(c) || c.ends_with(&s.symbol.path)
-                        }) {
-                            s.score += 0.2;
-                            s.reason = format!("{}, recently changed", s.reason);
-                        }
-                    }
+        let changed = if kungfu_git::is_git_repo(&self.project.root) {
+            kungfu_git::changed_files(&self.project.root).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        if !changed.is_empty() {
+            for s in &mut scored_symbols {
+                if changed.iter().any(|c| {
+                    s.symbol.path.ends_with(c) || c.ends_with(&s.symbol.path)
+                }) {
+                    s.score += 0.2;
+                    s.reason = format!("{}, recently changed", s.reason);
                 }
             }
         }
@@ -634,7 +651,10 @@ impl KungfuService {
             Some(intent),
         );
 
-        // 6. Extract snippets based on budget
+        // 6. Attach changed files list
+        packet.changed_files = changed;
+
+        // 7. Extract snippets based on budget
         let snippet_lines = budget.max_lines();
         if snippet_lines > 0 {
             self.fill_snippets(&mut packet, snippet_lines, &keywords);
@@ -810,6 +830,7 @@ impl KungfuService {
 
     /// Composite: explore a symbol — find + detail + related symbols + snippets in one call.
     pub fn explore_symbol(&self, name: &str, budget: Budget) -> Result<serde_json::Value> {
+        let budget = self.resolve_budget(budget);
         let search = self.search();
 
         // 1. Find symbol candidates
@@ -922,6 +943,7 @@ impl KungfuService {
 
     /// Composite: explore a file — outline + related files + key symbols in one call.
     pub fn explore_file(&self, path: &str, budget: Budget) -> Result<serde_json::Value> {
+        let budget = self.resolve_budget(budget);
         // 1. File outline
         let outline = self.file_outline(path)?;
 
@@ -966,6 +988,7 @@ impl KungfuService {
 
     /// Composite: investigate a query — ask_context + diff boost in one call.
     pub fn investigate(&self, query: &str, budget: Budget) -> Result<serde_json::Value> {
+        let budget = self.resolve_budget(budget);
         // 1. Main context via ask_context
         let packet = self.ask_context(query, budget)?;
 
@@ -1048,6 +1071,7 @@ impl KungfuService {
 
     /// Find all symbols that call the given symbol (callers / "who calls this?").
     pub fn callers(&self, name: &str, budget: Budget) -> Result<Vec<(Symbol, String)>> {
+        let budget = self.resolve_budget(budget);
         let store = self.store();
         let relations = store.load_relations()?;
         let all_symbols = self.search().get_all_symbols()?;
@@ -1088,6 +1112,7 @@ impl KungfuService {
 
     /// Find all symbols that the given symbol calls (callees / "what does this call?").
     pub fn callees(&self, name: &str, budget: Budget) -> Result<Vec<(Symbol, String)>> {
+        let budget = self.resolve_budget(budget);
         let store = self.store();
         let relations = store.load_relations()?;
         let all_symbols = self.search().get_all_symbols()?;
@@ -1127,6 +1152,7 @@ impl KungfuService {
     }
 
     pub fn diff_context(&self, budget: Budget) -> Result<ContextPacket> {
+        let budget = self.resolve_budget(budget);
         if !kungfu_git::is_git_repo(&self.project.root) {
             bail!("not a git repository");
         }
@@ -1138,6 +1164,7 @@ impl KungfuService {
                 budget,
                 intent: None,
                 items: Vec::new(),
+                changed_files: Vec::new(),
             });
         }
 

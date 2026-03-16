@@ -29,6 +29,9 @@ pub struct ContextPacket {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<Intent>,
     pub items: Vec<ContextItem>,
+    /// Files with uncommitted changes (populated by ask_context when git is available)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub changed_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -74,5 +74,6 @@ pub fn build_context_packet_full(
         budget,
         intent,
         items,
+        changed_files: Vec::new(),
     }
 }

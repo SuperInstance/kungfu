@@ -10,13 +10,15 @@ pub enum Budget {
     Small,
     Medium,
     Full,
+    /// Auto-resolve based on project size and query complexity
+    Auto,
 }
 
 impl Budget {
     pub fn top_k(&self) -> usize {
         match self {
             Budget::Tiny => 3,
-            Budget::Small => 5,
+            Budget::Small | Budget::Auto => 5,
             Budget::Medium => 8,
             Budget::Full => 12,
         }
@@ -25,9 +27,24 @@ impl Budget {
     pub fn max_lines(&self) -> usize {
         match self {
             Budget::Tiny => 0,
-            Budget::Small => 20,
+            Budget::Small | Budget::Auto => 20,
             Budget::Medium => 40,
             Budget::Full => 100,
+        }
+    }
+
+    /// Resolve Auto to a concrete budget based on project size.
+    /// - Small projects (<100 files): Full (cheap to return more)
+    /// - Medium projects (<1000 files): Small
+    /// - Large projects (1000+): Tiny
+    pub fn resolve(self, file_count: usize) -> Budget {
+        if self != Budget::Auto {
+            return self;
+        }
+        match file_count {
+            0..=100 => Budget::Medium,
+            101..=500 => Budget::Small,
+            _ => Budget::Small,
         }
     }
 }
@@ -39,6 +56,7 @@ impl fmt::Display for Budget {
             Budget::Small => write!(f, "small"),
             Budget::Medium => write!(f, "medium"),
             Budget::Full => write!(f, "full"),
+            Budget::Auto => write!(f, "auto"),
         }
     }
 }
@@ -52,7 +70,8 @@ impl FromStr for Budget {
             "small" => Ok(Budget::Small),
             "medium" => Ok(Budget::Medium),
             "full" => Ok(Budget::Full),
-            _ => Err(format!("invalid budget: '{}' (expected tiny, small, medium, full)", s)),
+            "auto" => Ok(Budget::Auto),
+            _ => Err(format!("invalid budget: '{}' (expected tiny, small, medium, full, auto)", s)),
         }
     }
 }
