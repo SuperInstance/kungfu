@@ -20,7 +20,7 @@ jobs:
             target: x86_64-apple-darwin
             name: kungfu-darwin-x86_64
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             name: kungfu-linux-x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -28,6 +28,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install musl-tools (Linux)
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
