@@ -1,6 +1,6 @@
 {
   "name": "kungfu-ai",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Context retrieval and distillation engine for coding agents. Saves tokens, speeds up agent workflows.",
   "keywords": ["ai", "agent", "context", "mcp", "coding-assistant", "token-optimization"],
   "license": "MIT",

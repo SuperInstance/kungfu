@@ -203,6 +203,21 @@ enum Commands {
         budget: String,
     },
 
+    /// Show largest symbols or files (hotspots), optionally weighted by git churn
+    Hotspots {
+        /// Number of results
+        #[arg(long, default_value = "20")]
+        top: usize,
+
+        /// Weight by git change frequency (LOC × commits)
+        #[arg(long)]
+        churn: bool,
+
+        /// Show file-level hotspots instead of symbol-level
+        #[arg(long)]
+        files: bool,
+    },
+
     /// Watch filesystem and re-index on changes
     Watch,
 
@@ -274,6 +289,7 @@ fn main() {
         Commands::Investigate { query, budget } => {
             commands::investigate(&query, parse_budget(&budget), json)
         }
+        Commands::Hotspots { top, churn, files } => commands::hotspots(top, churn, files, json),
         Commands::Watch => commands::watch(),
         Commands::Mcp => commands::mcp(),
     };

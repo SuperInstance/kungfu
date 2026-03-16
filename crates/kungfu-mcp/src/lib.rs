@@ -231,6 +231,16 @@ pub struct SymbolBudgetParam {
     pub scope: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HotspotsParam {
+    /// Number of results to return. Default: 20
+    pub top: Option<usize>,
+    /// Weight by git change frequency (LOC × commits). Default: false
+    pub churn: Option<bool>,
+    /// Show file-level hotspots instead of symbol-level. Default: false
+    pub files: Option<bool>,
+}
+
 fn parse_budget(s: Option<&str>) -> Budget {
     s.and_then(|s| s.parse().ok()).unwrap_or(Budget::Auto)
 }
@@ -710,6 +720,19 @@ impl KungfuMcp {
             }
         }))
         .map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Find largest symbols or files (hotspots), optionally weighted by git churn frequency. Use to identify complex code, refactoring candidates, and bug-prone areas")]
+    fn hotspots(
+        &self,
+        Parameters(params): Parameters<HotspotsParam>,
+    ) -> Result<String, String> {
+        let top = params.top.unwrap_or(20);
+        let churn = params.churn.unwrap_or(false);
+        let files = params.files.unwrap_or(false);
+        let service = self.service()?;
+        let entries = service.hotspots(top, churn, files).map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())
     }
 
     #[tool(description = "Find symbols related to a given symbol by name, path, or structural proximity")]

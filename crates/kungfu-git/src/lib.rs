@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -158,6 +159,24 @@ fn format_timestamp(ts: i64) -> String {
     let days = ts / 86400;
     let y = 1970 + (days * 4 + 2) / 1461; // rough year
     format!("{}", y)
+}
+
+/// Count how many commits touched each file (git churn).
+pub fn file_commit_counts(root: &Path) -> Result<HashMap<String, usize>> {
+    let output = Command::new("git")
+        .args(["log", "--format=", "--name-only"])
+        .current_dir(root)
+        .output()
+        .context("failed to run git log --name-only")?;
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in text.lines() {
+        if !line.is_empty() {
+            *counts.entry(line.to_string()).or_default() += 1;
+        }
+    }
+    Ok(counts)
 }
 
 pub fn staged_files(root: &Path) -> Result<Vec<String>> {

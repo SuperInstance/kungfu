@@ -384,6 +384,55 @@ pub fn clean(json: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn hotspots(top: usize, churn: bool, files: bool, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let entries = service.hotspots(top, churn, files)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else {
+        let label = if files { "File" } else { "Symbol" };
+        let size_label = if files { "Bytes" } else { "Lines" };
+        if churn {
+            println!("{:<4} {:<40} {:<50} {:>6} {:>6} {:>10}", "#", label, "Path", size_label, "Churn", "Score");
+            println!("{}", "-".repeat(120));
+            for (i, e) in entries.iter().enumerate() {
+                println!(
+                    "{:<4} {:<40} {:<50} {:>6} {:>6} {:>10.0}",
+                    i + 1,
+                    truncate_str(&e.name, 39),
+                    truncate_str(&e.path, 49),
+                    e.lines,
+                    e.churn.unwrap_or(0),
+                    e.score,
+                );
+            }
+        } else {
+            println!("{:<4} {:<40} {:<50} {:>6}", "#", label, "Path", size_label);
+            println!("{}", "-".repeat(104));
+            for (i, e) in entries.iter().enumerate() {
+                println!(
+                    "{:<4} {:<40} {:<50} {:>6}",
+                    i + 1,
+                    truncate_str(&e.name, 39),
+                    truncate_str(&e.path, 49),
+                    e.lines,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max - 1])
+    }
+}
+
 pub fn watch() -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;

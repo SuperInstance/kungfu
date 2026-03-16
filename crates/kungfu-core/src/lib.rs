@@ -55,6 +55,16 @@ pub struct SymbolOutline {
     pub exported: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HotspotEntry {
+    pub name: String,
+    pub path: String,
+    pub lines: usize,
+    pub kind: Option<String>,
+    pub churn: Option<usize>,
+    pub score: f64,
+}
+
 impl KungfuService {
     pub fn open(start_dir: &Path) -> Result<Self> {
         let project = Project::open(start_dir)?;
@@ -1407,6 +1417,67 @@ impl KungfuService {
             .collect();
 
         Ok(build_context_packet("diff context", scored, budget))
+    }
+
+    /// Find largest symbols or files, optionally weighted by git churn.
+    pub fn hotspots(&self, top: usize, churn: bool, files_mode: bool) -> Result<Vec<HotspotEntry>> {
+        self.ensure_fresh_index()?;
+
+        let churn_counts = if churn && kungfu_git::is_git_repo(&self.project.root) {
+            kungfu_git::file_commit_counts(&self.project.root).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
+        let mut entries: Vec<HotspotEntry> = if files_mode {
+            let files = self.store().load_files()?;
+            files
+                .into_iter()
+                .map(|f| {
+                    let lines = f.size as usize;
+                    let file_churn = churn_counts.get(&f.path).copied();
+                    let score = if churn {
+                        lines as f64 * file_churn.unwrap_or(1) as f64
+                    } else {
+                        lines as f64
+                    };
+                    HotspotEntry {
+                        name: f.path.rsplit('/').next().unwrap_or(&f.path).to_string(),
+                        path: f.path,
+                        lines,
+                        kind: f.language,
+                        churn: file_churn,
+                        score,
+                    }
+                })
+                .collect()
+        } else {
+            let symbols = self.store().load_symbols()?;
+            symbols
+                .into_iter()
+                .map(|s| {
+                    let lines = s.span.end_line.saturating_sub(s.span.start_line) + 1;
+                    let file_churn = churn_counts.get(&s.path).copied();
+                    let score = if churn {
+                        lines as f64 * file_churn.unwrap_or(1) as f64
+                    } else {
+                        lines as f64
+                    };
+                    HotspotEntry {
+                        name: s.name,
+                        path: s.path,
+                        lines,
+                        kind: Some(format!("{:?}", s.kind)),
+                        churn: file_churn,
+                        score,
+                    }
+                })
+                .collect()
+        };
+
+        entries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        entries.truncate(top);
+        Ok(entries)
     }
 }
 
