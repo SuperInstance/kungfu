@@ -15,6 +15,7 @@ use tracing::info;
 
 pub struct KungfuService {
     project: Project,
+    store: JsonStore,
 }
 
 pub struct StatusInfo {
@@ -57,19 +58,20 @@ pub struct SymbolOutline {
 impl KungfuService {
     pub fn open(start_dir: &Path) -> Result<Self> {
         let project = Project::open(start_dir)?;
-        Ok(Self { project })
+        let store = JsonStore::new(&project.index_dir());
+        Ok(Self { project, store })
     }
 
     pub fn config(&self) -> &kungfu_config::KungfuConfig {
         &self.project.config
     }
 
-    fn store(&self) -> JsonStore {
-        JsonStore::new(&self.project.index_dir())
+    fn store(&self) -> &JsonStore {
+        &self.store
     }
 
-    fn search(&self) -> SearchEngine {
-        SearchEngine::new(self.store())
+    fn search(&self) -> SearchEngine<'_> {
+        SearchEngine::new(&self.store)
     }
 
     /// Resolve Budget::Auto to a concrete budget based on project size.
@@ -168,14 +170,14 @@ impl KungfuService {
     }
 
     pub fn index_full(&self) -> Result<kungfu_index::indexer::IndexStats> {
-        let store = self.store();
-        let mut indexer = Indexer::new(&self.project.root, self.project.config.clone(), store);
+        self.store.invalidate();
+        let mut indexer = Indexer::new(&self.project.root, self.project.config.clone(), &self.store);
         indexer.index_full()
     }
 
     pub fn index_incremental(&self) -> Result<kungfu_index::indexer::IndexStats> {
-        let store = self.store();
-        let mut indexer = Indexer::new(&self.project.root, self.project.config.clone(), store);
+        self.store.invalidate();
+        let mut indexer = Indexer::new(&self.project.root, self.project.config.clone(), &self.store);
         indexer.index_incremental()
     }
 
@@ -193,8 +195,8 @@ impl KungfuService {
                 symbols_extracted: 0,
             });
         }
-        let store = self.store();
-        let mut indexer = Indexer::new(&self.project.root, self.project.config.clone(), store);
+        self.store.invalidate();
+        let mut indexer = Indexer::new(&self.project.root, self.project.config.clone(), &self.store);
         indexer.index_only(&changed)
     }
 
@@ -777,55 +779,51 @@ impl KungfuService {
                 Err(_) => continue,
             };
 
+            // Precompute stems for keywords
+            let keyword_stems: Vec<Option<String>> = keywords
+                .iter()
+                .map(|kw| kungfu_search::simple_stem(kw))
+                .collect();
+
             // Check if any keyword appears in file content
             let content_lower = content.to_lowercase();
-            let matched_keyword = keywords.iter().find(|kw| {
+            let kw_idx = keywords.iter().enumerate().position(|(i, kw)| {
                 content_lower.contains(*kw)
-                    || kungfu_search::simple_stem(kw)
-                        .map_or(false, |s| content_lower.contains(&s))
+                    || keyword_stems[i].as_ref().map_or(false, |s| content_lower.contains(s.as_str()))
             });
 
-            let keyword = match matched_keyword {
-                Some(kw) => *kw,
+            let kw_idx = match kw_idx {
+                Some(idx) => idx,
                 None => continue,
             };
+            let keyword = keywords[kw_idx];
+            let stem = keyword_stems[kw_idx].as_deref();
 
-            // Find the best matched line
-            let matched_line = content
-                .lines()
-                .find(|line| {
-                    let ll = line.to_lowercase();
-                    ll.contains(keyword)
-                        || kungfu_search::simple_stem(keyword)
-                            .map_or(false, |s| ll.contains(&s))
-                })
-                .unwrap_or("")
-                .trim();
+            // Single pass: find matched line and its number
+            let mut matched_line = "";
+            let mut match_line_num = 0usize;
+            for (i, line) in content.lines().enumerate() {
+                let ll = line.to_lowercase();
+                if ll.contains(keyword) || stem.map_or(false, |s| ll.contains(s)) {
+                    matched_line = line.trim();
+                    match_line_num = i + 1;
+                    break;
+                }
+            }
 
             if matched_line.is_empty() {
                 continue;
             }
 
             let snippet = if matched_line.len() > 100 {
-                format!("{}...", &matched_line[..100])
+                let truncated: String = matched_line.chars().take(100).collect();
+                format!("{}...", truncated)
             } else {
                 matched_line.to_string()
             };
 
             // Find the best symbol in this file to attach the match to
             if let Some(file_syms) = file_symbols.get(f.id.as_str()) {
-                // Prefer symbol whose span contains the match
-                let match_line_num = content
-                    .lines()
-                    .enumerate()
-                    .find(|(_, line)| {
-                        let ll = line.to_lowercase();
-                        ll.contains(keyword)
-                            || kungfu_search::simple_stem(keyword)
-                                .map_or(false, |s| ll.contains(&s))
-                    })
-                    .map(|(i, _)| i + 1)
-                    .unwrap_or(0);
 
                 let best = file_syms
                     .iter()
@@ -851,14 +849,15 @@ impl KungfuService {
         let mut file_cache: HashMap<String, Vec<String>> = HashMap::new();
         let all_symbols = self.search().get_all_symbols().unwrap_or_default();
 
-        for item in &mut packet.items {
-            let span = all_symbols
-                .iter()
-                .find(|s| s.path == item.path && s.name == item.name)
-                .map(|s| (s.span.start_line, s.span.end_line));
+        // Build lookup map for O(1) span resolution
+        let span_map: HashMap<(&str, &str), (usize, usize)> = all_symbols
+            .iter()
+            .map(|s| ((s.path.as_str(), s.name.as_str()), (s.span.start_line, s.span.end_line)))
+            .collect();
 
-            let (start, end) = match span {
-                Some(s) => s,
+        for item in &mut packet.items {
+            let (start, end) = match span_map.get(&(item.path.as_str(), item.name.as_str())) {
+                Some(&s) => s,
                 None => continue,
             };
 

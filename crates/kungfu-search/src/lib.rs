@@ -5,8 +5,8 @@ use kungfu_types::relation::RelationKind;
 use kungfu_types::symbol::Symbol;
 use kungfu_types::Budget;
 
-pub struct SearchEngine {
-    store: JsonStore,
+pub struct SearchEngine<'a> {
+    store: &'a JsonStore,
 }
 
 pub struct SearchResult<T> {
@@ -14,8 +14,8 @@ pub struct SearchResult<T> {
     pub score: f64,
 }
 
-impl SearchEngine {
-    pub fn new(store: JsonStore) -> Self {
+impl<'a> SearchEngine<'a> {
+    pub fn new(store: &'a JsonStore) -> Self {
         Self { store }
     }
 
@@ -204,7 +204,7 @@ impl SearchEngine {
 
         // Path components for proximity scoring
         let target_parts: Vec<&str> = target_path.split('/').collect();
-        let target_dir = target_parts[..target_parts.len().saturating_sub(1)].join("/");
+        let target_dir = target_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
         let target_stem = std::path::Path::new(target_path)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -232,8 +232,7 @@ impl SearchEngine {
                     score += rel_score;
                 }
 
-                let f_parts: Vec<&str> = f.path.split('/').collect();
-                let f_dir = f_parts[..f_parts.len().saturating_sub(1)].join("/");
+                let f_dir = f.path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
                 let f_stem = std::path::Path::new(&f.path)
                     .file_stem()
                     .and_then(|s| s.to_str())
@@ -246,6 +245,7 @@ impl SearchEngine {
                 }
 
                 // 2. Shared parent directory
+                let f_parts: Vec<&str> = f.path.split('/').collect();
                 let shared_depth = target_parts
                     .iter()
                     .zip(f_parts.iter())

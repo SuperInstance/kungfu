@@ -12,10 +12,10 @@ use tracing::{debug, info, warn};
 
 use crate::scanner;
 
-pub struct Indexer {
+pub struct Indexer<'a> {
     root: std::path::PathBuf,
     config: KungfuConfig,
-    store: JsonStore,
+    store: &'a JsonStore,
     parser: Parser,
 }
 
@@ -27,8 +27,8 @@ pub struct IndexStats {
     pub symbols_extracted: usize,
 }
 
-impl Indexer {
-    pub fn new(root: &Path, config: KungfuConfig, store: JsonStore) -> Self {
+impl<'a> Indexer<'a> {
+    pub fn new(root: &Path, config: KungfuConfig, store: &'a JsonStore) -> Self {
         Self {
             root: root.to_path_buf(),
             config,
@@ -150,7 +150,7 @@ impl Indexer {
                 stats.new_files += 1;
             }
 
-            match self.index_file(path) {
+            match self.index_file_with_content(path, content) {
                 Ok((entry, symbols, imports, calls)) => {
                     new_fingerprints.insert(entry.path.clone(), entry.hash.clone());
                     if !imports.is_empty() {
@@ -295,6 +295,10 @@ impl Indexer {
 
     fn index_file(&mut self, path: &Path) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>, Vec<RawCall>)> {
         let content = std::fs::read(path)?;
+        self.index_file_with_content(path, content)
+    }
+
+    fn index_file_with_content(&mut self, path: &Path, content: Vec<u8>) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>, Vec<RawCall>)> {
         let hash = blake3::hash(&content).to_hex().to_string();
 
         let rel_path = path
@@ -367,6 +371,8 @@ impl Indexer {
 
         // Stem lookup: "foo" → ["src/foo.rs", "src/foo/mod.rs", ...]
         let mut stem_to_paths: HashMap<String, Vec<&str>> = HashMap::new();
+        // Suffix lookup: "foo/bar.rs" → ["src/foo/bar.rs", "lib/foo/bar.rs", ...]
+        let mut suffix_to_paths: HashMap<&str, Vec<&str>> = HashMap::new();
         for f in files {
             let p = Path::new(&f.path);
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
@@ -375,6 +381,16 @@ impl Indexer {
                     .or_default()
                     .push(&f.path);
             }
+            // Index all suffixes starting after each '/'
+            let path_str = f.path.as_str();
+            let mut pos = 0;
+            while let Some(slash) = path_str[pos..].find('/') {
+                let suffix = &path_str[pos + slash + 1..];
+                suffix_to_paths.entry(suffix).or_default().push(path_str);
+                pos += slash + 1;
+            }
+            // Also index the full path itself
+            suffix_to_paths.entry(path_str).or_default().push(path_str);
         }
 
         for (source_path, imports) in file_imports {
@@ -388,7 +404,7 @@ impl Indexer {
                 .to_string_lossy();
 
             for imp in imports {
-                let resolved = resolve_import(&imp.path, &source_dir, &path_to_id, &stem_to_paths);
+                let resolved = resolve_import(&imp.path, &source_dir, &path_to_id, &stem_to_paths, &suffix_to_paths);
                 for target_path in resolved {
                     if let Some(&target_id) = path_to_id.get(target_path) {
                         if target_id != source_id {
@@ -413,13 +429,13 @@ impl Indexer {
 
         // Deduplicate
         relations.sort_by(|a, b| {
-            (&a.source_id, &a.target_id, &a.kind.to_string())
-                .cmp(&(&b.source_id, &b.target_id, &b.kind.to_string()))
+            (&a.source_id, &a.target_id, &a.kind)
+                .cmp(&(&b.source_id, &b.target_id, &b.kind))
         });
         relations.dedup_by(|a, b| {
             a.source_id == b.source_id
                 && a.target_id == b.target_id
-                && std::mem::discriminant(&a.kind) == std::mem::discriminant(&b.kind)
+                && a.kind == b.kind
         });
 
         relations
@@ -550,6 +566,7 @@ fn resolve_import<'a>(
     source_dir: &str,
     path_to_id: &HashMap<&'a str, &str>,
     stem_to_paths: &HashMap<String, Vec<&'a str>>,
+    suffix_to_paths: &HashMap<&'a str, Vec<&'a str>>,
 ) -> Vec<&'a str> {
     let mut results = Vec::new();
 
@@ -563,7 +580,7 @@ fn resolve_import<'a>(
         // Normalize path (remove ./ and resolve ../)
         let normalized = normalize_path(&base);
 
-        // Try common extensions
+        // Try common extensions — use direct HashMap lookup instead of linear scan
         let candidates = [
             normalized.clone(),
             format!("{}.ts", normalized),
@@ -576,7 +593,7 @@ fn resolve_import<'a>(
             format!("{}/__init__.py", normalized),
         ];
         for candidate in &candidates {
-            if let Some(&path) = path_to_id.keys().find(|p| **p == candidate.as_str()) {
+            if let Some((&path, _)) = path_to_id.get_key_value(candidate.as_str()) {
                 results.push(path);
             }
         }
@@ -603,12 +620,10 @@ fn resolve_import<'a>(
             format!("{}/lib.rs", module_path),
         ];
 
-        // Also search with common prefixes like src/
+        // Use suffix index for O(1) lookup instead of scanning all paths
         for candidate in &candidates {
-            for &path in path_to_id.keys() {
-                if path.ends_with(candidate.as_str()) {
-                    results.push(path);
-                }
+            if let Some(paths) = suffix_to_paths.get(candidate.as_str()) {
+                results.extend(paths.iter());
             }
         }
 
@@ -630,11 +645,10 @@ fn resolve_import<'a>(
             format!("{}.py", file_path),
             format!("{}/__init__.py", file_path),
         ];
+        // Use suffix index for O(1) lookup
         for candidate in &candidates {
-            for &path in path_to_id.keys() {
-                if path.ends_with(candidate.as_str()) {
-                    results.push(path);
-                }
+            if let Some(paths) = suffix_to_paths.get(candidate.as_str()) {
+                results.extend(paths.iter());
             }
         }
         if !results.is_empty() {

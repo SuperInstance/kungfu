@@ -51,7 +51,7 @@ pub fn watch_and_index(root: &Path, config: KungfuConfig, index_dir: &Path) -> R
 
                 debug!("change detected, re-indexing...");
                 let store = JsonStore::new(index_dir);
-                let mut indexer = Indexer::new(root, config.clone(), store);
+                let mut indexer = Indexer::new(root, config.clone(), &store);
                 match indexer.index_incremental() {
                     Ok(stats) => {
                         if stats.new_files > 0 || stats.changed_files > 0 || stats.removed_files > 0 {
