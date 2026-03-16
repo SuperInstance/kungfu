@@ -1046,6 +1046,86 @@ impl KungfuService {
         }
     }
 
+    /// Find all symbols that call the given symbol (callers / "who calls this?").
+    pub fn callers(&self, name: &str, budget: Budget) -> Result<Vec<(Symbol, String)>> {
+        let store = self.store();
+        let relations = store.load_relations()?;
+        let all_symbols = self.search().get_all_symbols()?;
+
+        // Find target symbol IDs matching name
+        let target_ids: HashSet<&str> = all_symbols
+            .iter()
+            .filter(|s| s.name == name)
+            .map(|s| s.id.as_str())
+            .collect();
+
+        if target_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Find Calls relations where target is our symbol
+        let caller_ids: Vec<&str> = relations
+            .iter()
+            .filter(|r| r.kind == RelationKind::Calls && target_ids.contains(r.target_id.as_str()))
+            .map(|r| r.source_id.as_str())
+            .collect();
+
+        let mut results: Vec<(Symbol, String)> = Vec::new();
+        let mut seen = HashSet::new();
+        for caller_id in &caller_ids {
+            if seen.contains(caller_id) {
+                continue;
+            }
+            if let Some(sym) = all_symbols.iter().find(|s| s.id == *caller_id) {
+                seen.insert(*caller_id);
+                results.push((sym.clone(), format!("calls {}", name)));
+            }
+        }
+
+        results.truncate(budget.top_k());
+        Ok(results)
+    }
+
+    /// Find all symbols that the given symbol calls (callees / "what does this call?").
+    pub fn callees(&self, name: &str, budget: Budget) -> Result<Vec<(Symbol, String)>> {
+        let store = self.store();
+        let relations = store.load_relations()?;
+        let all_symbols = self.search().get_all_symbols()?;
+
+        // Find source symbol IDs matching name
+        let source_ids: HashSet<&str> = all_symbols
+            .iter()
+            .filter(|s| s.name == name)
+            .map(|s| s.id.as_str())
+            .collect();
+
+        if source_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Find Calls relations where source is our symbol
+        let callee_ids: Vec<&str> = relations
+            .iter()
+            .filter(|r| r.kind == RelationKind::Calls && source_ids.contains(r.source_id.as_str()))
+            .map(|r| r.target_id.as_str())
+            .collect();
+
+        let mut results: Vec<(Symbol, String)> = Vec::new();
+        let mut seen = HashSet::new();
+        for callee_id in &callee_ids {
+            if seen.contains(callee_id) {
+                continue;
+            }
+            if let Some(sym) = all_symbols.iter().find(|s| s.id == *callee_id) {
+                seen.insert(*callee_id);
+                results.push((sym.clone(), format!("called by {}", name)));
+            }
+        }
+
+        results.truncate(budget.top_k());
+        Ok(results)
+    }
+
     pub fn diff_context(&self, budget: Budget) -> Result<ContextPacket> {
         if !kungfu_git::is_git_repo(&self.project.root) {
             bail!("not a git repository");

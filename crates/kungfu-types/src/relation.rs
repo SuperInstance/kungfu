@@ -13,6 +13,7 @@ pub enum RelationKind {
     RelatedByPath,
     TestFor,
     ConfigFor,
+    Calls,
 }
 
 impl fmt::Display for RelationKind {

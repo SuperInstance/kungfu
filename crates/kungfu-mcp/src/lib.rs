@@ -471,6 +471,62 @@ impl KungfuMcp {
         })
     }
 
+    #[tool(description = "Find all symbols that call the given symbol (callers / 'who calls this?')")]
+    fn callers(
+        &self,
+        Parameters(params): Parameters<SymbolBudgetParam>,
+    ) -> Result<String, String> {
+        let budget_str = params.budget.as_deref().unwrap_or("small").to_string();
+        let name = params.name.clone();
+        self.cached("callers", &name, &budget_str, || {
+            let budget = parse_budget(Some(&budget_str));
+            let service = self.service()?;
+            let results = service.callers(&name, budget).map_err(|e| e.to_string())?;
+            let items: Vec<_> = results
+                .iter()
+                .map(|(sym, reason)| {
+                    serde_json::json!({
+                        "name": sym.name,
+                        "kind": sym.kind.to_string(),
+                        "path": sym.path,
+                        "line": sym.span.start_line,
+                        "signature": sym.signature,
+                        "reason": reason,
+                    })
+                })
+                .collect();
+            serde_json::to_string_pretty(&items).map_err(|e| e.to_string())
+        })
+    }
+
+    #[tool(description = "Find all symbols that the given symbol calls (callees / 'what does this call?')")]
+    fn callees(
+        &self,
+        Parameters(params): Parameters<SymbolBudgetParam>,
+    ) -> Result<String, String> {
+        let budget_str = params.budget.as_deref().unwrap_or("small").to_string();
+        let name = params.name.clone();
+        self.cached("callees", &name, &budget_str, || {
+            let budget = parse_budget(Some(&budget_str));
+            let service = self.service()?;
+            let results = service.callees(&name, budget).map_err(|e| e.to_string())?;
+            let items: Vec<_> = results
+                .iter()
+                .map(|(sym, reason)| {
+                    serde_json::json!({
+                        "name": sym.name,
+                        "kind": sym.kind.to_string(),
+                        "path": sym.path,
+                        "line": sym.span.start_line,
+                        "signature": sym.signature,
+                        "reason": reason,
+                    })
+                })
+                .collect();
+            serde_json::to_string_pretty(&items).map_err(|e| e.to_string())
+        })
+    }
+
     #[tool(description = "Show query cache statistics: hit/miss counts, entries cached, hit rate")]
     fn cache_stats(&self) -> Result<String, String> {
         let cache = self.cache.lock().map_err(|e| e.to_string())?;

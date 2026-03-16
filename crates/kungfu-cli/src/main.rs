@@ -145,6 +145,26 @@ enum Commands {
         budget: String,
     },
 
+    /// Find all symbols that call the given symbol
+    #[command(name = "callers")]
+    Callers {
+        /// Symbol name
+        name: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
+    /// Find all symbols called by the given symbol
+    #[command(name = "callees")]
+    Callees {
+        /// Symbol name
+        name: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
     /// Composite: investigate a query — smart context + diff awareness in one call
     #[command(name = "investigate")]
     Investigate {
@@ -205,6 +225,12 @@ fn main() {
         }
         Commands::DiffContext { budget } => {
             commands::diff_context(parse_budget(&budget), json)
+        }
+        Commands::Callers { name, budget } => {
+            commands::callers(&name, parse_budget(&budget), json)
+        }
+        Commands::Callees { name, budget } => {
+            commands::callees(&name, parse_budget(&budget), json)
         }
         Commands::ExploreSymbol { name, budget } => {
             commands::explore_symbol(&name, parse_budget(&budget), json)

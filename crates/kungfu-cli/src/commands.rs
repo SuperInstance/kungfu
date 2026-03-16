@@ -750,6 +750,70 @@ pub fn diff_context(budget: Budget, json: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn callers(name: &str, budget: Budget, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let results = service.callers(name, budget)?;
+
+    if json {
+        let items: Vec<_> = results
+            .iter()
+            .map(|(sym, reason)| {
+                serde_json::json!({
+                    "name": sym.name,
+                    "kind": sym.kind.to_string(),
+                    "path": sym.path,
+                    "line": sym.span.start_line,
+                    "signature": sym.signature,
+                    "reason": reason,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+    } else if results.is_empty() {
+        println!("No callers found for '{}'", name);
+    } else {
+        println!("Callers of '{}':", name);
+        for (sym, _) in &results {
+            let sig = sym.signature.as_deref().unwrap_or(&sym.name);
+            println!("  {}:{}  {} {}", sym.path, sym.span.start_line, sym.kind, sig);
+        }
+    }
+    Ok(())
+}
+
+pub fn callees(name: &str, budget: Budget, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let results = service.callees(name, budget)?;
+
+    if json {
+        let items: Vec<_> = results
+            .iter()
+            .map(|(sym, reason)| {
+                serde_json::json!({
+                    "name": sym.name,
+                    "kind": sym.kind.to_string(),
+                    "path": sym.path,
+                    "line": sym.span.start_line,
+                    "signature": sym.signature,
+                    "reason": reason,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+    } else if results.is_empty() {
+        println!("No callees found for '{}'", name);
+    } else {
+        println!("'{}' calls:", name);
+        for (sym, _) in &results {
+            let sig = sym.signature.as_deref().unwrap_or(&sym.name);
+            println!("  {}:{}  {} {}", sym.path, sym.span.start_line, sym.kind, sig);
+        }
+    }
+    Ok(())
+}
+
 pub fn explore_symbol(name: &str, budget: Budget, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;

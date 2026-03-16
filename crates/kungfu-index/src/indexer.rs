@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use kungfu_config::KungfuConfig;
-use kungfu_parse::{Parser, RawImport};
+use kungfu_parse::{Parser, RawCall, RawImport};
 use kungfu_storage::JsonStore;
 use kungfu_types::file::{FileEntry, Language};
 use kungfu_types::relation::{Relation, RelationKind};
@@ -45,14 +45,16 @@ impl Indexer {
         let mut fingerprints = HashMap::new();
         let mut all_symbols = Vec::new();
         let mut all_imports: Vec<(String, Vec<RawImport>)> = Vec::new();
+        let mut all_calls: Vec<RawCall> = Vec::new();
 
         for path in &paths {
             match self.index_file(path) {
-                Ok((entry, symbols, imports)) => {
+                Ok((entry, symbols, imports, calls)) => {
                     fingerprints.insert(entry.path.clone(), entry.hash.clone());
                     if !imports.is_empty() {
                         all_imports.push((entry.path.clone(), imports));
                     }
+                    all_calls.extend(calls);
                     all_symbols.extend(symbols);
                     files.push(entry);
                 }
@@ -62,7 +64,7 @@ impl Indexer {
             }
         }
 
-        let relations = Self::build_relations(&files, &all_imports);
+        let relations = Self::build_relations(&files, &all_imports, &all_symbols, &all_calls);
 
         let stats = IndexStats {
             total_files: files.len(),
@@ -95,6 +97,7 @@ impl Indexer {
         let mut new_files = Vec::new();
         let mut new_symbols = Vec::new();
         let mut all_imports: Vec<(String, Vec<RawImport>)> = Vec::new();
+        let mut all_calls: Vec<RawCall> = Vec::new();
 
         let mut stats = IndexStats {
             total_files: 0,
@@ -148,11 +151,12 @@ impl Indexer {
             }
 
             match self.index_file(path) {
-                Ok((entry, symbols, imports)) => {
+                Ok((entry, symbols, imports, calls)) => {
                     new_fingerprints.insert(entry.path.clone(), entry.hash.clone());
                     if !imports.is_empty() {
                         all_imports.push((entry.path.clone(), imports));
                     }
+                    all_calls.extend(calls);
                     new_symbols.extend(symbols);
                     new_files.push(entry);
                 }
@@ -172,9 +176,8 @@ impl Indexer {
         stats.total_files = new_files.len();
         stats.symbols_extracted = new_symbols.len();
 
-        // Rebuild relations from all imports (unchanged files need re-parsing for imports,
-        // but for now we only have imports from changed files — still useful)
-        let relations = Self::build_relations(&new_files, &all_imports);
+        // Rebuild relations from all imports and calls
+        let relations = Self::build_relations(&new_files, &all_imports, &new_symbols, &all_calls);
 
         self.store.save_files(&new_files)?;
         self.store.save_symbols(&new_symbols)?;
@@ -207,6 +210,7 @@ impl Indexer {
         let mut new_files: Vec<FileEntry> = Vec::new();
         let mut new_symbols: Vec<Symbol> = Vec::new();
         let mut all_imports: Vec<(String, Vec<RawImport>)> = Vec::new();
+        let mut all_calls: Vec<RawCall> = Vec::new();
 
         let mut stats = IndexStats {
             total_files: 0,
@@ -246,12 +250,13 @@ impl Indexer {
             }
 
             match self.index_file(&abs_path) {
-                Ok((entry, symbols, imports)) => {
+                Ok((entry, symbols, imports, calls)) => {
                     new_fingerprints.insert(entry.path.clone(), entry.hash.clone());
                     stats.symbols_extracted += symbols.len();
                     if !imports.is_empty() {
                         all_imports.push((entry.path.clone(), imports));
                     }
+                    all_calls.extend(calls);
                     new_symbols.extend(symbols);
                     new_files.push(entry);
                 }
@@ -273,7 +278,7 @@ impl Indexer {
             .into_iter()
             .filter(|r| !changed_file_ids.contains(r.source_id.as_str()))
             .collect();
-        let new_relations = Self::build_relations(&new_files, &all_imports);
+        let new_relations = Self::build_relations(&new_files, &all_imports, &new_symbols, &all_calls);
         relations.extend(new_relations);
 
         self.store.save_files(&new_files)?;
@@ -288,7 +293,7 @@ impl Indexer {
         Ok(stats)
     }
 
-    fn index_file(&mut self, path: &Path) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>)> {
+    fn index_file(&mut self, path: &Path) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>, Vec<RawCall>)> {
         let content = std::fs::read(path)?;
         let hash = blake3::hash(&content).to_hex().to_string();
 
@@ -319,35 +324,38 @@ impl Indexer {
             tags: Vec::new(),
         };
 
-        // Extract symbols and imports if it's a code file
-        let (symbols, imports) = if language.is_code() {
+        // Extract symbols, imports, and calls if it's a code file
+        let (symbols, imports, calls) = if language.is_code() {
             let content_str = String::from_utf8_lossy(&content);
             match self.parser.parse(&content_str, language, &file_id, &rel_path) {
                 Ok(result) => {
                     debug!(
-                        "extracted {} symbols, {} imports from {}",
+                        "extracted {} symbols, {} imports, {} calls from {}",
                         result.symbols.len(),
                         result.imports.len(),
+                        result.calls.len(),
                         rel_path
                     );
-                    (result.symbols, result.imports)
+                    (result.symbols, result.imports, result.calls)
                 }
                 Err(e) => {
                     debug!("parsing failed for {}: {}", rel_path, e);
-                    (Vec::new(), Vec::new())
+                    (Vec::new(), Vec::new(), Vec::new())
                 }
             }
         } else {
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), Vec::new())
         };
 
-        Ok((entry, symbols, imports))
+        Ok((entry, symbols, imports, calls))
     }
 
-    /// Resolve collected imports into Relations by matching import paths to indexed files.
+    /// Resolve collected imports and calls into Relations.
     fn build_relations(
         files: &[FileEntry],
         file_imports: &[(String, Vec<RawImport>)],
+        symbols: &[Symbol],
+        calls: &[RawCall],
     ) -> Vec<Relation> {
         let mut relations = Vec::new();
 
@@ -400,6 +408,9 @@ impl Indexer {
         Self::build_test_relations(&files, &mut relations);
         Self::build_config_relations(&files, &mut relations);
 
+        // Build Calls relations from extracted call data
+        Self::build_call_relations(symbols, calls, &mut relations);
+
         // Deduplicate
         relations.sort_by(|a, b| {
             (&a.source_id, &a.target_id, &a.kind.to_string())
@@ -412,6 +423,39 @@ impl Indexer {
         });
 
         relations
+    }
+
+    /// Resolve extracted calls into Calls relations by matching callee names to known symbols.
+    fn build_call_relations(symbols: &[Symbol], calls: &[RawCall], relations: &mut Vec<Relation>) {
+        // Build name → symbol IDs lookup (only functions/methods/classes)
+        let mut name_to_ids: HashMap<&str, Vec<&str>> = HashMap::new();
+        for sym in symbols {
+            if matches!(
+                sym.kind,
+                kungfu_types::symbol::SymbolKind::Function
+                    | kungfu_types::symbol::SymbolKind::Method
+                    | kungfu_types::symbol::SymbolKind::Class
+                    | kungfu_types::symbol::SymbolKind::Struct
+            ) {
+                name_to_ids.entry(sym.name.as_str()).or_default().push(&sym.id);
+            }
+        }
+
+        // Resolve each call
+        for call in calls {
+            if let Some(target_ids) = name_to_ids.get(call.callee_name.as_str()) {
+                for &target_id in target_ids {
+                    if target_id != call.caller_id {
+                        relations.push(Relation {
+                            source_id: call.caller_id.clone(),
+                            target_id: target_id.to_string(),
+                            kind: RelationKind::Calls,
+                            weight: 1.0,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     /// Detect test files and create TestFor relations to their source files.
