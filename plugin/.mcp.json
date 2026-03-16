@@ -1,0 +1,6 @@
+{
+  "kungfu": {
+    "command": "npx",
+    "args": ["-y", "kungfu-ai", "mcp"]
+  }
+}
