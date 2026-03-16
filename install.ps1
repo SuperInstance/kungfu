@@ -8,10 +8,19 @@ $Version = if ($env:KUNGFU_VERSION) { $env:KUNGFU_VERSION } else { "latest" }
 $InstallDir = if ($env:KUNGFU_DIR) { $env:KUNGFU_DIR } else { "$env:USERPROFILE\.local\bin" }
 
 # Detect architecture
-$RawArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+$RawArch = $null
+try {
+    $RawArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+} catch {}
+if (-not $RawArch) {
+    # Fallback for Windows PowerShell 5.1
+    $RawArch = $env:PROCESSOR_ARCHITECTURE
+}
 switch ($RawArch) {
     "X64"   { $Arch = "x86_64" }
+    "AMD64" { $Arch = "x86_64" }
     "Arm64" { $Arch = "aarch64" }
+    "ARM64" { $Arch = "aarch64" }
     default { Write-Error "Unsupported architecture: $RawArch"; exit 1 }
 }
 
