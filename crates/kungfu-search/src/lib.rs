@@ -517,6 +517,102 @@ fn is_vowel(c: char) -> bool {
     matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')
 }
 
+/// Expand query keywords with conceptually related terms (synonym/concept mapping).
+/// Returns the original keywords + expansions. Used for semantic-like search.
+pub fn expand_query(keywords: &[&str]) -> Vec<String> {
+    let mut expanded: Vec<String> = keywords.iter().map(|k| k.to_string()).collect();
+
+    for kw in keywords {
+        if let Some(synonyms) = concept_synonyms(kw) {
+            for syn in synonyms {
+                if !expanded.iter().any(|e| e == syn) {
+                    expanded.push(syn.to_string());
+                }
+            }
+        }
+    }
+
+    expanded
+}
+
+/// Return related terms for common programming concepts.
+fn concept_synonyms(word: &str) -> Option<&'static [&'static str]> {
+    Some(match word {
+        // Authentication & security
+        "auth" | "authenticate" | "authentication" => &["login", "verify", "token", "credential", "session", "password", "jwt", "oauth"],
+        "login" | "signin" => &["auth", "authenticate", "credential", "session"],
+        "permission" | "authorize" | "authorization" => &["role", "access", "guard", "policy", "acl"],
+        "security" => &["auth", "encrypt", "token", "sanitize", "csrf", "xss"],
+
+        // Database & storage
+        "database" | "db" => &["query", "connection", "pool", "migrate", "schema", "model", "repository", "dao"],
+        "query" => &["select", "filter", "where", "fetch", "find"],
+        "migrate" | "migration" => &["schema", "alter", "table", "database"],
+        "cache" | "caching" => &["store", "redis", "memcache", "ttl", "invalidate", "expire"],
+
+        // HTTP & networking
+        "request" | "req" => &["response", "handler", "route", "middleware", "http", "endpoint"],
+        "response" | "res" => &["request", "handler", "status", "header", "body"],
+        "route" | "routing" => &["handler", "endpoint", "path", "middleware", "controller", "dispatch"],
+        "middleware" => &["handler", "filter", "interceptor", "guard", "pipe", "chain"],
+        "api" => &["endpoint", "route", "handler", "rest", "controller"],
+        "http" => &["request", "response", "handler", "client", "server", "fetch"],
+        "websocket" | "ws" => &["socket", "connect", "message", "channel"],
+
+        // Error handling
+        "error" | "err" => &["exception", "panic", "fail", "handle", "catch", "result", "unwrap"],
+        "exception" => &["error", "throw", "catch", "handle", "try"],
+        "panic" => &["error", "crash", "abort", "unwrap", "bail"],
+        "retry" => &["backoff", "attempt", "reconnect", "fallback"],
+
+        // Async & concurrency
+        "async" | "asynchronous" => &["await", "future", "promise", "spawn", "task", "concurrent"],
+        "concurrent" | "concurrency" => &["thread", "mutex", "lock", "sync", "parallel", "atomic", "channel"],
+        "thread" => &["spawn", "pool", "mutex", "lock", "concurrent", "parallel"],
+        "channel" => &["sender", "receiver", "mpsc", "broadcast", "message"],
+
+        // Serialization & parsing
+        "serialize" | "serialization" => &["deserialize", "json", "serde", "encode", "marshal", "format"],
+        "parse" | "parsing" => &["lexer", "tokenize", "ast", "grammar", "syntax", "tree"],
+        "json" => &["serialize", "deserialize", "serde", "parse", "encode", "decode"],
+        "validate" | "validation" => &["check", "verify", "sanitize", "constraint", "schema", "rule"],
+
+        // Logging & observability
+        "log" | "logging" => &["trace", "debug", "info", "warn", "logger", "tracing"],
+        "metric" | "metrics" => &["counter", "gauge", "histogram", "monitor", "telemetry"],
+        "trace" | "tracing" => &["span", "log", "instrument", "observe"],
+
+        // Testing
+        "test" | "testing" => &["assert", "mock", "fixture", "spec", "expect", "verify"],
+        "mock" | "mocking" => &["stub", "fake", "spy", "test", "fixture"],
+
+        // Config & setup
+        "config" | "configuration" => &["settings", "options", "env", "environment", "setup", "preference"],
+        "env" | "environment" => &["config", "variable", "dotenv", "settings"],
+
+        // Data structures
+        "list" | "array" => &["vec", "slice", "collection", "iterator", "push", "append"],
+        "map" | "hashmap" | "dict" | "dictionary" => &["hash", "lookup", "key", "value", "entry", "table"],
+        "queue" => &["enqueue", "dequeue", "fifo", "buffer", "channel"],
+        "tree" => &["node", "traverse", "walk", "leaf", "branch", "parent", "child"],
+
+        // File & IO
+        "file" => &["read", "write", "path", "open", "stream", "io", "fs"],
+        "stream" => &["read", "write", "buffer", "pipe", "io", "reader", "writer"],
+
+        // Common verbs in code
+        "create" | "new" => &["init", "build", "construct", "make", "instantiate"],
+        "delete" | "remove" => &["drop", "destroy", "clean", "purge", "clear"],
+        "update" | "modify" => &["set", "patch", "change", "mutate", "edit"],
+        "send" => &["emit", "dispatch", "publish", "notify", "broadcast"],
+        "receive" | "recv" => &["listen", "subscribe", "consume", "accept", "handle"],
+        "render" => &["display", "draw", "paint", "view", "template", "component"],
+        "transform" => &["convert", "map", "adapt", "translate", "process"],
+
+        _ => return None,
+    })
+}
+
 /// Check if the query suggests interest in test files.
 pub fn query_wants_tests(words: &[&str]) -> bool {
     words.iter().any(|w| {

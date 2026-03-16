@@ -129,6 +129,16 @@ enum Commands {
         budget: String,
     },
 
+    /// Semantic search: find symbols by concept with query expansion
+    #[command(name = "semantic-search")]
+    SemanticSearch {
+        /// Query (e.g. "auth logic", "database connection")
+        query: String,
+
+        #[arg(long, default_value = "small")]
+        budget: String,
+    },
+
     /// Show git history for a file
     #[command(name = "file-history")]
     FileHistory {
@@ -243,6 +253,9 @@ fn main() {
         }
         Commands::DiffContext { budget } => {
             commands::diff_context(parse_budget(&budget), json)
+        }
+        Commands::SemanticSearch { query, budget } => {
+            commands::semantic_search(&query, parse_budget(&budget), json)
         }
         Commands::FileHistory { path } => commands::file_history(&path, json),
         Commands::SymbolHistory { name } => commands::symbol_history(&name, json),

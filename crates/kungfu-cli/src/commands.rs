@@ -753,6 +753,47 @@ pub fn diff_context(budget: Budget, json: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn semantic_search(query: &str, budget: Budget, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.semantic_search(query, budget)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        let keywords = result["keywords"].as_array().map(|a| {
+            a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", ")
+        }).unwrap_or_default();
+        let expanded = result["expanded_terms"].as_array().map(|a| {
+            a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", ")
+        }).unwrap_or_default();
+
+        println!("Query:    {}", query);
+        println!("Keywords: {}", keywords);
+        if !expanded.is_empty() {
+            println!("Expanded: {}", expanded);
+        }
+        println!();
+
+        if let Some(results) = result.get("results").and_then(|r| r.as_array()) {
+            for r in results {
+                let match_type = r["match_type"].as_str().unwrap_or("?");
+                let marker = if match_type == "semantic" { "~" } else { "=" };
+                println!(
+                    "  {:.2} [{}] {}:{}  {} {}",
+                    r["score"].as_f64().unwrap_or(0.0),
+                    marker,
+                    r["path"].as_str().unwrap_or(""),
+                    r["line"].as_u64().unwrap_or(0),
+                    r["kind"].as_str().unwrap_or(""),
+                    r["name"].as_str().unwrap_or(""),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn file_history(path: &str, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;

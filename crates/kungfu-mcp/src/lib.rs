@@ -635,6 +635,22 @@ impl KungfuMcp {
         })
     }
 
+    #[tool(description = "Semantic search: find symbols by concept, not just name. Expands query with related terms (e.g. 'auth' finds verify_token, login, session)")]
+    fn semantic_search(
+        &self,
+        Parameters(params): Parameters<QueryParam>,
+    ) -> Result<String, String> {
+        let budget_str = params.budget.as_deref().unwrap_or("small").to_string();
+        let query = params.query.clone();
+        let scope = params.scope.clone();
+        self.cached_scoped("semantic_search", &query, &budget_str, scope.as_deref(), || {
+            let budget = parse_budget(Some(&budget_str));
+            let service = self.service()?;
+            let result = service.semantic_search(&query, budget).map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+        })
+    }
+
     #[tool(description = "Get git history for a file: recent commits with date, author, message")]
     fn file_history(
         &self,

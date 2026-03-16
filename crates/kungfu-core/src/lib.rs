@@ -468,6 +468,36 @@ impl KungfuService {
             }
         }
 
+        // Strategy B3: semantic expansion — search with conceptually related terms
+        if scored_symbols.len() < budget.top_k() {
+            let expanded = kungfu_search::expand_query(&keywords);
+            // Only use new terms (not original keywords)
+            let new_terms: Vec<&str> = expanded
+                .iter()
+                .filter(|t| !keywords.contains(&t.as_str()))
+                .map(|t| t.as_str())
+                .collect();
+
+            if !new_terms.is_empty() {
+                let expanded_query = new_terms.join(" ");
+                let sem_results = search.find_symbol(&expanded_query, Budget::Full)?;
+                for r in sem_results {
+                    if seen_ids.contains(&r.item.id) {
+                        continue;
+                    }
+                    // Lower score for semantic matches — they're conceptual, not exact
+                    if r.score >= 0.5 {
+                        seen_ids.insert(r.item.id.clone());
+                        scored_symbols.push(ScoredSymbol {
+                            symbol: r.item,
+                            score: r.score * 0.5,
+                            reason: "semantic match (related concept)".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
         // Strategy C: sibling symbols from top match's file (important for impact/understand)
         if matches!(intent, Intent::Impact | Intent::Understand) {
             if let Some(top) = scored_symbols
@@ -1149,6 +1179,77 @@ impl KungfuService {
 
         results.truncate(budget.top_k());
         Ok(results)
+    }
+
+    /// Semantic search: expand query with related concepts, then search symbols.
+    pub fn semantic_search(&self, query: &str, budget: Budget) -> Result<serde_json::Value> {
+        let budget = self.resolve_budget(budget);
+        let query_lower = query.to_lowercase();
+        let words: Vec<&str> = query_lower.split_whitespace().collect();
+
+        let keywords: Vec<&str> = words
+            .iter()
+            .filter(|w| !is_stop_word(w))
+            .copied()
+            .collect();
+
+        let expanded = kungfu_search::expand_query(&keywords);
+        let new_terms: Vec<&str> = expanded
+            .iter()
+            .filter(|t| !keywords.contains(&t.as_str()))
+            .map(|t| t.as_str())
+            .collect();
+
+        let search = self.search();
+        let mut results = Vec::new();
+        let mut seen = HashSet::new();
+
+        // Search with original keywords
+        let keyword_query = keywords.join(" ");
+        for r in search.find_symbol(&keyword_query, Budget::Full)? {
+            if seen.insert(r.item.id.clone()) {
+                results.push(serde_json::json!({
+                    "name": r.item.name,
+                    "kind": r.item.kind.to_string(),
+                    "path": r.item.path,
+                    "line": r.item.span.start_line,
+                    "score": r.score,
+                    "match_type": "direct",
+                }));
+            }
+        }
+
+        // Search with expanded terms
+        if !new_terms.is_empty() {
+            let expanded_query = new_terms.join(" ");
+            for r in search.find_symbol(&expanded_query, Budget::Full)? {
+                if seen.insert(r.item.id.clone()) && r.score >= 0.5 {
+                    results.push(serde_json::json!({
+                        "name": r.item.name,
+                        "kind": r.item.kind.to_string(),
+                        "path": r.item.path,
+                        "line": r.item.span.start_line,
+                        "score": r.score * 0.6,
+                        "match_type": "semantic",
+                    }));
+                }
+            }
+        }
+
+        // Sort by score and truncate
+        results.sort_by(|a, b| {
+            b["score"].as_f64().unwrap_or(0.0)
+                .partial_cmp(&a["score"].as_f64().unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(budget.top_k());
+
+        Ok(serde_json::json!({
+            "query": query,
+            "keywords": keywords,
+            "expanded_terms": new_terms,
+            "results": results,
+        }))
     }
 
     /// Get git history for a file: recent commits.
