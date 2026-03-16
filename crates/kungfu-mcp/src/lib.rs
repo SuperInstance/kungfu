@@ -160,6 +160,11 @@ impl KungfuMcp {
                 let val = val.clone();
                 cache.bytes_served += val.len() as u64;
                 cache.calls_served += 1;
+                // Persistent stats for cache hits too
+                drop(cache);
+                if let Ok(svc) = self.service() {
+                    svc.track_call(tool, val.len());
+                }
                 return Ok(val);
             }
         }
@@ -175,6 +180,11 @@ impl KungfuMcp {
             cache.bytes_served += result.len() as u64;
             cache.calls_served += 1;
             cache.put(key, result.clone());
+        }
+
+        // Persistent stats
+        if let Ok(svc) = self.service() {
+            svc.track_call(tool, result.len());
         }
 
         Ok(result)
@@ -705,19 +715,26 @@ impl KungfuMcp {
         };
         let estimated_tokens_saved = estimated_raw_bytes.saturating_sub(kungfu_bytes) / 4;
 
+        let persistent = self.service()
+            .and_then(|svc| svc.usage_stats().map_err(|e| e.to_string()))
+            .unwrap_or_default();
+
         serde_json::to_string_pretty(&serde_json::json!({
-            "calls_served": cache.calls_served,
-            "bytes_served": kungfu_bytes,
-            "estimated_raw_bytes": estimated_raw_bytes,
-            "compression_ratio": format!("{:.1}x", savings_ratio),
-            "estimated_tokens_saved": estimated_tokens_saved,
-            "cache": {
-                "entries": cache.entries.len(),
-                "capacity": CACHE_CAPACITY,
-                "hits": cache.hits,
-                "misses": cache.misses,
-                "hit_rate_pct": format!("{:.1}", hit_rate),
-            }
+            "session": {
+                "calls_served": cache.calls_served,
+                "bytes_served": kungfu_bytes,
+                "estimated_raw_bytes": estimated_raw_bytes,
+                "compression_ratio": format!("{:.1}x", savings_ratio),
+                "estimated_tokens_saved": estimated_tokens_saved,
+                "cache": {
+                    "entries": cache.entries.len(),
+                    "capacity": CACHE_CAPACITY,
+                    "hits": cache.hits,
+                    "misses": cache.misses,
+                    "hit_rate_pct": format!("{:.1}", hit_rate),
+                }
+            },
+            "lifetime": persistent,
         }))
         .map_err(|e| e.to_string())
     }

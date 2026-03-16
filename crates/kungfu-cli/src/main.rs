@@ -218,6 +218,9 @@ enum Commands {
         files: bool,
     },
 
+    /// Show accumulated usage statistics
+    Stats,
+
     /// Watch filesystem and re-index on changes
     Watch,
 
@@ -290,6 +293,7 @@ fn main() {
             commands::investigate(&query, parse_budget(&budget), json)
         }
         Commands::Hotspots { top, churn, files } => commands::hotspots(top, churn, files, json),
+        Commands::Stats => commands::stats(json),
         Commands::Watch => commands::watch(),
         Commands::Mcp => commands::mcp(),
     };

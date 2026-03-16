@@ -384,6 +384,43 @@ pub fn clean(json: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn stats(json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let stats = service.usage_stats()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&stats)?);
+    } else {
+        println!("=== Kungfu Usage Stats ===");
+        println!();
+        println!("  Total calls:        {}", stats.total_calls);
+        println!("  Bytes served:       {} ({:.1} KB)", stats.total_bytes_served, stats.total_bytes_served as f64 / 1024.0);
+        let tokens = stats.total_bytes_served / 4;
+        println!("  Est. tokens served: {}", tokens);
+        if let Some(ref first) = stats.first_used {
+            println!("  First used:         {}", first);
+        }
+        if let Some(ref last) = stats.last_used {
+            println!("  Last used:          {}", last);
+        }
+        if !stats.per_command.is_empty() {
+            println!();
+            println!("  Per command:");
+            let mut cmds: Vec<_> = stats.per_command.iter().collect();
+            cmds.sort_by(|a, b| b.1.cmp(a.1));
+            for (cmd, count) in cmds {
+                println!("    {:<25} {:>6} calls", cmd, count);
+            }
+        }
+        if stats.total_calls == 0 {
+            println!();
+            println!("  No usage recorded yet. Stats accumulate as you use kungfu.");
+        }
+    }
+    Ok(())
+}
+
 pub fn hotspots(top: usize, churn: bool, files: bool, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
@@ -719,9 +756,11 @@ pub fn context(query: &str, budget: Budget, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
     let packet = service.context(query, budget)?;
+    let output = serde_json::to_string_pretty(&packet)?;
+    service.track_call("context", output.len());
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&packet)?);
+        println!("{}", output);
     } else {
         println!("Query:  {}", packet.query);
         println!("Budget: {}", packet.budget);
@@ -744,9 +783,11 @@ pub fn ask_context(task: &str, budget: Budget, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
     let packet = service.ask_context(task, budget)?;
+    let output = serde_json::to_string_pretty(&packet)?;
+    service.track_call("ask_context", output.len());
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&packet)?);
+        println!("{}", output);
     } else {
         println!("Task:   {}", packet.query);
         if let Some(ref intent) = packet.intent {
@@ -783,9 +824,11 @@ pub fn diff_context(budget: Budget, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
     let packet = service.diff_context(budget)?;
+    let output = serde_json::to_string_pretty(&packet)?;
+    service.track_call("diff_context", output.len());
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&packet)?);
+        println!("{}", output);
     } else {
         if packet.items.is_empty() {
             println!("No changed files or relevant symbols found.");

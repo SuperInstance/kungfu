@@ -1419,6 +1419,18 @@ impl KungfuService {
         Ok(build_context_packet("diff context", scored, budget))
     }
 
+    /// Record a tool/command call for persistent usage stats.
+    pub fn track_call(&self, command: &str, bytes: usize) {
+        let mut stats = kungfu_types::stats::UsageStats::load(&self.project.kungfu_dir);
+        stats.record(command, bytes as u64);
+        let _ = stats.save(&self.project.kungfu_dir);
+    }
+
+    /// Load persistent usage stats.
+    pub fn usage_stats(&self) -> Result<kungfu_types::stats::UsageStats> {
+        Ok(kungfu_types::stats::UsageStats::load(&self.project.kungfu_dir))
+    }
+
     /// Find largest symbols or files, optionally weighted by git churn.
     pub fn hotspots(&self, top: usize, churn: bool, files_mode: bool) -> Result<Vec<HotspotEntry>> {
         self.ensure_fresh_index()?;

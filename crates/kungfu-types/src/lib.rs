@@ -5,5 +5,6 @@ pub mod relation;
 pub mod chunk;
 pub mod context;
 pub mod project;
+pub mod stats;
 
 pub use budget::Budget;
