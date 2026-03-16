@@ -129,6 +129,20 @@ enum Commands {
         budget: String,
     },
 
+    /// Show git history for a file
+    #[command(name = "file-history")]
+    FileHistory {
+        /// File path
+        path: String,
+    },
+
+    /// Show git blame + commits for a symbol
+    #[command(name = "symbol-history")]
+    SymbolHistory {
+        /// Symbol name
+        name: String,
+    },
+
     /// Composite: explore a symbol — find + detail + related + snippet in one call
     #[command(name = "explore-symbol")]
     ExploreSymbol {
@@ -230,6 +244,8 @@ fn main() {
         Commands::DiffContext { budget } => {
             commands::diff_context(parse_budget(&budget), json)
         }
+        Commands::FileHistory { path } => commands::file_history(&path, json),
+        Commands::SymbolHistory { name } => commands::symbol_history(&name, json),
         Commands::Callers { name, budget } => {
             commands::callers(&name, parse_budget(&budget), json)
         }

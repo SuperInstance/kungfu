@@ -1151,6 +1151,79 @@ impl KungfuService {
         Ok(results)
     }
 
+    /// Get git history for a file: recent commits.
+    pub fn file_history(&self, path: &str, max_entries: usize) -> Result<serde_json::Value> {
+        if !kungfu_git::is_git_repo(&self.project.root) {
+            bail!("not a git repository");
+        }
+        let entries = kungfu_git::file_log(&self.project.root, path, max_entries)?;
+        let items: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "hash": e.hash,
+                    "date": e.date,
+                    "author": e.author,
+                    "message": e.message,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "path": path, "commits": items }))
+    }
+
+    /// Get git blame for a symbol: who changed its code and why.
+    pub fn symbol_history(&self, name: &str) -> Result<serde_json::Value> {
+        if !kungfu_git::is_git_repo(&self.project.root) {
+            bail!("not a git repository");
+        }
+        let sym = self.search().get_symbol(name)?;
+        let symbol = match sym {
+            Some(s) => s,
+            None => return Ok(serde_json::json!({ "error": format!("Symbol '{}' not found", name) })),
+        };
+
+        let blame = kungfu_git::blame_lines(
+            &self.project.root,
+            &symbol.path,
+            symbol.span.start_line,
+            symbol.span.end_line,
+        )
+        .unwrap_or_default();
+
+        let blame_items: Vec<_> = blame
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "hash": b.hash,
+                    "author": b.author,
+                    "date": b.date,
+                    "summary": b.summary,
+                })
+            })
+            .collect();
+
+        let log = kungfu_git::file_log(&self.project.root, &symbol.path, 5).unwrap_or_default();
+        let log_items: Vec<_> = log
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "hash": e.hash,
+                    "date": e.date,
+                    "author": e.author,
+                    "message": e.message,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "symbol": name,
+            "path": symbol.path,
+            "lines": format!("{}-{}", symbol.span.start_line, symbol.span.end_line),
+            "blame": blame_items,
+            "recent_commits": log_items,
+        }))
+    }
+
     pub fn diff_context(&self, budget: Budget) -> Result<ContextPacket> {
         let budget = self.resolve_budget(budget);
         if !kungfu_git::is_git_repo(&self.project.root) {

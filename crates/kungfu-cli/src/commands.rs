@@ -753,6 +753,77 @@ pub fn diff_context(budget: Budget, json: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn file_history(path: &str, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.file_history(path, 10)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        if let Some(commits) = result.get("commits").and_then(|c| c.as_array()) {
+            println!("History of {}:", path);
+            for c in commits {
+                println!(
+                    "  {} {} {} — {}",
+                    c["hash"].as_str().unwrap_or(""),
+                    c["date"].as_str().unwrap_or("").get(..10).unwrap_or(""),
+                    c["author"].as_str().unwrap_or(""),
+                    c["message"].as_str().unwrap_or(""),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn symbol_history(name: &str, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.symbol_history(name)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        if let Some(err) = result.get("error") {
+            println!("{}", err.as_str().unwrap_or("not found"));
+            return Ok(());
+        }
+        println!(
+            "{} at {}:{}",
+            name,
+            result["path"].as_str().unwrap_or(""),
+            result["lines"].as_str().unwrap_or(""),
+        );
+        if let Some(blame) = result.get("blame").and_then(|b| b.as_array()) {
+            if !blame.is_empty() {
+                println!("  Blame:");
+                for b in blame {
+                    println!(
+                        "    {} {} — {}",
+                        b["hash"].as_str().unwrap_or(""),
+                        b["author"].as_str().unwrap_or(""),
+                        b["summary"].as_str().unwrap_or(""),
+                    );
+                }
+            }
+        }
+        if let Some(commits) = result.get("recent_commits").and_then(|c| c.as_array()) {
+            if !commits.is_empty() {
+                println!("  Recent commits:");
+                for c in commits {
+                    println!(
+                        "    {} {} {} — {}",
+                        c["hash"].as_str().unwrap_or(""),
+                        c["date"].as_str().unwrap_or("").get(..10).unwrap_or(""),
+                        c["author"].as_str().unwrap_or(""),
+                        c["message"].as_str().unwrap_or(""),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn callers(name: &str, budget: Budget, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;

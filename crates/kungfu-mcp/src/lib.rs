@@ -23,6 +23,10 @@ struct CacheState {
     index_mtime: Option<SystemTime>,
     hits: u64,
     misses: u64,
+    /// Total bytes returned to agent via kungfu
+    bytes_served: u64,
+    /// Total MCP tool calls served
+    calls_served: u64,
 }
 
 impl CacheState {
@@ -33,6 +37,8 @@ impl CacheState {
             index_mtime: None,
             hits: 0,
             misses: 0,
+            bytes_served: 0,
+            calls_served: 0,
         }
     }
 
@@ -151,7 +157,10 @@ impl KungfuMcp {
         // Check cache
         if let Ok(mut cache) = self.cache.lock() {
             if let Some(val) = cache.get(key) {
-                return Ok(val.clone());
+                let val = val.clone();
+                cache.bytes_served += val.len() as u64;
+                cache.calls_served += 1;
+                return Ok(val);
             }
         }
 
@@ -161,8 +170,10 @@ impl KungfuMcp {
         // Apply scope filter
         let result = apply_scope(&result, scope);
 
-        // Store
+        // Store + track
         if let Ok(mut cache) = self.cache.lock() {
+            cache.bytes_served += result.len() as u64;
+            cache.calls_served += 1;
             cache.put(key, result.clone());
         }
 
@@ -624,21 +635,63 @@ impl KungfuMcp {
         })
     }
 
-    #[tool(description = "Show query cache statistics: hit/miss counts, entries cached, hit rate")]
-    fn cache_stats(&self) -> Result<String, String> {
+    #[tool(description = "Get git history for a file: recent commits with date, author, message")]
+    fn file_history(
+        &self,
+        Parameters(params): Parameters<FilePathParam>,
+    ) -> Result<String, String> {
+        let service = self.service()?;
+        let result = service.file_history(&params.path, 10).map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Get git blame + recent commits for a symbol: who changed it and why")]
+    fn symbol_history(
+        &self,
+        Parameters(params): Parameters<SymbolNameParam>,
+    ) -> Result<String, String> {
+        let name = params.name.clone();
+        self.cached("symbol_history", &name, "", || {
+            let service = self.service()?;
+            let result = service.symbol_history(&name).map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+        })
+    }
+
+    #[tool(description = "Show usage statistics: token savings, cache hit rate, calls served")]
+    fn usage_stats(&self) -> Result<String, String> {
         let cache = self.cache.lock().map_err(|e| e.to_string())?;
-        let total = cache.hits + cache.misses;
-        let hit_rate = if total > 0 {
-            (cache.hits as f64 / total as f64) * 100.0
+        let total_cache = cache.hits + cache.misses;
+        let hit_rate = if total_cache > 0 {
+            (cache.hits as f64 / total_cache as f64) * 100.0
         } else {
             0.0
         };
+
+        // Estimate raw size: each call would read ~8KB (avg file) without kungfu
+        // Token estimate: ~4 chars per token
+        let estimated_raw_bytes = cache.calls_served * 8192;
+        let kungfu_bytes = cache.bytes_served;
+        let savings_ratio = if kungfu_bytes > 0 {
+            estimated_raw_bytes as f64 / kungfu_bytes as f64
+        } else {
+            0.0
+        };
+        let estimated_tokens_saved = estimated_raw_bytes.saturating_sub(kungfu_bytes) / 4;
+
         serde_json::to_string_pretty(&serde_json::json!({
-            "entries": cache.entries.len(),
-            "capacity": CACHE_CAPACITY,
-            "hits": cache.hits,
-            "misses": cache.misses,
-            "hit_rate_pct": format!("{:.1}", hit_rate),
+            "calls_served": cache.calls_served,
+            "bytes_served": kungfu_bytes,
+            "estimated_raw_bytes": estimated_raw_bytes,
+            "compression_ratio": format!("{:.1}x", savings_ratio),
+            "estimated_tokens_saved": estimated_tokens_saved,
+            "cache": {
+                "entries": cache.entries.len(),
+                "capacity": CACHE_CAPACITY,
+                "hits": cache.hits,
+                "misses": cache.misses,
+                "hit_rate_pct": format!("{:.1}", hit_rate),
+            }
         }))
         .map_err(|e| e.to_string())
     }
