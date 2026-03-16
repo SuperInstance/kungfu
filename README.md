@@ -157,7 +157,9 @@ Add to your agent config (Claude Code, Cursor, etc.):
 
 ## Agent rules
 
-Add to `CLAUDE.md` or system prompt of your project:
+Add to `CLAUDE.md` or system prompt of your project. Pick the variant that fits your setup:
+
+### With MCP (recommended)
 
 ```markdown
 ## Context retrieval
@@ -170,17 +172,31 @@ Add to `CLAUDE.md` or system prompt of your project:
 - Prefer tiny/small budget. Escalate to medium/full only when needed.
 ```
 
+### Without MCP (CLI via Bash)
+
+If MCP is unavailable (corporate restrictions, unsupported IDE), use CLI:
+
+```markdown
+## Context retrieval
+- Before reading files, run `kungfu ask-context "<task>" --budget small --json` via Bash.
+- Use `kungfu find-symbol <name> --json` to locate code by name instead of reading whole files.
+- Use `kungfu file-outline <path> --json` before reading a file — often the outline is enough.
+- Only read full files when kungfu output confirms you need them.
+- After git changes, run `kungfu diff-context --json` to focus on what changed.
+- Prefer tiny/small budget. Escalate to medium/full only when needed.
+```
+
 ### Recommended workflow
 
 ```
 Task received
     │
     ▼
-ask_context("task description", budget: "tiny")
+ask_context("task description", budget: "tiny")    ← MCP tool or: kungfu ask-context "..." --budget tiny --json
     │
     ├── Got enough? → Start working
     │
-    ├── Need more detail? → ask_context(..., budget: "small")
+    ├── Need more detail? → escalate to budget: "small"
     │
     ├── Need specific symbol? → find_symbol / get_symbol
     │
