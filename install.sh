@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # kungfu installer
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.sh | sh
-set -euo pipefail
+set -eu
 
 REPO="denyzhirkov/kungfu"
 VERSION="${KUNGFU_VERSION:-latest}"
