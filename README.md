@@ -23,10 +23,17 @@ Items:  3
 ## Install
 
 ```sh
+# npm (all platforms)
+npm install -g kungfu-ai
+
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.ps1 | iex
 ```
 
-Supports macOS (ARM64, x86_64) and Linux (x86_64, ARM64).
+Supports macOS (ARM64, x86_64), Linux (x86_64), and Windows (x86_64).
 
 Or build from source:
 
@@ -113,8 +120,9 @@ The highest-value command. Given a task description, it:
 
 | Budget | Items | Snippets | Use case |
 |--------|-------|----------|----------|
+| `auto` | adaptive | adaptive | **Default** — adapts to project size |
 | `tiny` | 3 | none | Quick pointers — "where to look" |
-| `small` | 5 | 20 lines | Default — signatures + context |
+| `small` | 5 | 20 lines | Signatures + context |
 | `medium` | 8 | 40 lines | Deeper exploration |
 | `full` | 12 | 100 lines | Complete picture |
 
@@ -137,7 +145,7 @@ Add to your agent config (Claude Code, Cursor, etc.):
 }
 ```
 
-### 13 MCP tools
+### 21 MCP tools
 
 | Tool | Description |
 |------|-------------|
@@ -148,12 +156,21 @@ Add to your agent config (Claude Code, Cursor, etc.):
 | `get_symbol` | Detailed symbol info by exact name |
 | `search_text` | Text search across indexed files |
 | `find_files` | Find files by path pattern |
+| `semantic_search` | Find symbols by concept with query expansion |
 | `find_related_files` | Related files by imports, tests, configs, proximity |
 | `find_related_symbols` | Related symbols in same file |
 | `get_minimal_context` | Smallest high-confidence context set |
 | `build_task_context` | Ranked context packet for a task |
 | `ask_context` | Smart retrieval: intent detection + multi-strategy search |
 | `diff_context` | Context focused on git changes |
+| `explore_symbol` | Composite: find + detail + related + snippet in one call |
+| `explore_file` | Composite: outline + related files + key symbols |
+| `investigate` | Composite: ask_context + diff awareness |
+| `callers` | Call graph: who calls this symbol? |
+| `callees` | Call graph: what does this symbol call? |
+| `file_history` | Git log for a file: recent commits |
+| `symbol_history` | Git blame + commits for a symbol |
+| `usage_stats` | Token savings, cache hit rate, calls served |
 
 ## Agent rules
 
@@ -267,7 +284,8 @@ Agent immediately knows where to look. Then reads only the relevant file.
 - Parses code with [tree-sitter](https://tree-sitter.github.io/) — Rust, TypeScript, JavaScript, Python, Go
 - Extracts symbols: functions, classes, structs, methods, traits, interfaces, types, constants
 - Extracts imports from AST and resolves them to actual files in the project
-- Builds relations: `imports`, `test_for`, `config_for`
+- Builds relations: `imports`, `test_for`, `config_for`, `calls`
+- Extracts function call graph from AST (callers/callees)
 - Incremental re-indexing via blake3 file fingerprints
 
 ### Search & ranking
@@ -277,7 +295,7 @@ Agent immediately knows where to look. Then reads only the relevant file.
 - Path matching with filename boost (0.9) vs directory match (0.6)
 
 ### Context assembly
-- Multi-strategy search: symbols, text, related files, import chains
+- Multi-strategy search: symbols, text, related files, import chains, semantic expansion
 - Deduplication by (path, name)
 - Changed-file bonus from git
 - Test/config proximity bonuses based on query intent
@@ -322,16 +340,20 @@ enabled = true
 
 ## Benchmarks
 
-Tested on the kungfu codebase itself (48 files, 270 symbols):
+Tested across popular open-source projects (Apple Silicon):
 
-| Metric | Result |
-|--------|--------|
-| Precision (11 queries) | 24/24 expected items found |
-| Edge cases | 7/7 — unicode, special chars, empty queries |
-| Unit tests | 36/36 |
-| Token savings (tiny) | ~275 tokens vs ~7,500 reading one file (27x) |
-| Index time | ~0.1s for 48 files |
-| Binary size | ~11MB |
+| Project | Language | Files | Symbols | Index | ask-context |
+|---------|----------|------:|--------:|------:|------------:|
+| express | JS       |   201 |   1,948 |  0.5s |       227ms |
+| flask   | Python   |   217 |   1,629 |  0.6s |       228ms |
+| gin     | Go       |   118 |   1,487 |  0.7s |       217ms |
+| axum    | Rust     |   474 |   2,771 |  1.3s |       269ms |
+| cargo   | Rust     | 2,718 |  12,009 | 17.4s |       783ms |
+| django  | Python   | 6,907 |  42,917 | 37.9s |     2,125ms |
+| ruff    | Rust     | 9,702 |  42,239 | 67.2s |     2,300ms |
+| go      | Go       |14,022 | 105,497 |186.8s |     4,661ms |
+
+See [BENCHMARKS.md](BENCHMARKS.md) for full results across all 21 tools.
 
 ## License
 
