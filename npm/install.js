@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 "use strict";
 
-const { execSync } = require("child_process");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
@@ -38,6 +37,14 @@ function getPlatform() {
   return { name: `kungfu-${p}-${a}${ext}`, ext };
 }
 
+function getCacheDir() {
+  const home = os.homedir();
+  if (os.platform() === "win32") {
+    return path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "kungfu", "bin");
+  }
+  return path.join(process.env.XDG_CACHE_HOME || path.join(home, ".cache"), "kungfu", "bin");
+}
+
 function download(url) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith("https") ? https : http;
@@ -66,7 +73,24 @@ async function main() {
   const binDir = path.join(__dirname, "bin");
   const binPath = path.join(binDir, `kungfu${ext}`);
 
-  // Skip if binary already exists (e.g., in CI cache)
+  // Check persistent cache first (~/.cache/kungfu/bin/kungfu-v1.0.6)
+  const cacheDir = getCacheDir();
+  const cachedBin = path.join(cacheDir, `kungfu-${tag}${ext}`);
+
+  if (fs.existsSync(cachedBin)) {
+    const stat = fs.statSync(cachedBin);
+    if (stat.size > 1000) {
+      // Copy from cache to local bin
+      if (!fs.existsSync(binDir)) {
+        fs.mkdirSync(binDir, { recursive: true });
+      }
+      fs.copyFileSync(cachedBin, binPath);
+      fs.chmodSync(binPath, 0o755);
+      return;
+    }
+  }
+
+  // Skip if binary already exists locally
   if (fs.existsSync(binPath)) {
     const stat = fs.statSync(binPath);
     if (stat.size > 1000) {
@@ -85,6 +109,16 @@ async function main() {
 
     fs.writeFileSync(binPath, data);
     fs.chmodSync(binPath, 0o755);
+
+    // Save to persistent cache for future npx runs
+    try {
+      if (!fs.existsSync(cacheDir)) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+      }
+      fs.copyFileSync(binPath, cachedBin);
+    } catch (_) {
+      // Cache write failure is non-fatal
+    }
 
     console.log(`kungfu: installed to ${binPath}`);
   } catch (err) {
