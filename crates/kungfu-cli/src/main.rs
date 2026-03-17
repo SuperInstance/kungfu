@@ -218,6 +218,33 @@ enum Commands {
         files: bool,
     },
 
+    /// Generate project onboarding summary: architecture, patterns, key symbols
+    Onboard,
+
+    /// Blast radius analysis: transitive callers and dependents of a symbol
+    Affected {
+        /// Symbol name
+        name: String,
+
+        /// Max depth of transitive analysis
+        #[arg(long, default_value = "3")]
+        depth: usize,
+    },
+
+    /// Find minimal test set to run based on git diff
+    #[command(name = "smart-test")]
+    SmartTest,
+
+    /// Code review context: risks, missing co-changes, untested code
+    Review,
+
+    /// Analyze module coupling: fan-in, fan-out, co-change frequency
+    Coupling {
+        /// Number of results
+        #[arg(long, default_value = "20")]
+        top: usize,
+    },
+
     /// Show accumulated usage statistics
     Stats,
 
@@ -293,6 +320,11 @@ fn main() {
             commands::investigate(&query, parse_budget(&budget), json)
         }
         Commands::Hotspots { top, churn, files } => commands::hotspots(top, churn, files, json),
+        Commands::Onboard => commands::onboard(json),
+        Commands::Affected { name, depth } => commands::affected(&name, depth, json),
+        Commands::SmartTest => commands::smart_test(json),
+        Commands::Review => commands::review(json),
+        Commands::Coupling { top } => commands::coupling(top, json),
         Commands::Stats => commands::stats(json),
         Commands::Watch => commands::watch(),
         Commands::Mcp => commands::mcp(),

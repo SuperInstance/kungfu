@@ -86,6 +86,17 @@ kungfu repo-outline                     # compact repo map
 kungfu file-outline src/auth/service.ts # symbols in a file
 ```
 
+### Analysis
+
+```sh
+kungfu onboard                          # project summary: architecture, patterns, key symbols
+kungfu affected AuthService --depth 3   # blast radius: who depends on this symbol?
+kungfu smart-test                       # minimal test set based on git diff
+kungfu review                           # code review context: risks, missing co-changes
+kungfu coupling --top 10                # module coupling: fan-in, fan-out, co-change
+kungfu hotspots --churn                 # largest/most changed code
+```
+
 ### Maintenance
 
 ```sh
@@ -146,7 +157,7 @@ Add to your agent config (Claude Code, Cursor, etc.):
 }
 ```
 
-### 21 MCP tools
+### 26 MCP tools
 
 | Tool | Description |
 |------|-------------|
@@ -171,6 +182,11 @@ Add to your agent config (Claude Code, Cursor, etc.):
 | `callees` | Call graph: what does this symbol call? |
 | `file_history` | Git log for a file: recent commits |
 | `symbol_history` | Git blame + commits for a symbol |
+| `onboard` | Project summary: architecture, patterns, key symbols, naming |
+| `affected` | Blast radius: transitive callers/dependents of a symbol |
+| `smart_test` | Minimal test set based on git diff |
+| `review` | Code review context: risks, missing co-changes, untested code |
+| `coupling` | Module coupling: fan-in, fan-out, co-change frequency |
 | `usage_stats` | Token savings, cache hit rate, calls served |
 
 ## Agent rules

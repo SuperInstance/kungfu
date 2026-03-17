@@ -56,6 +56,71 @@ pub struct SymbolOutline {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct OnboardInfo {
+    pub project_name: String,
+    pub languages: Vec<(String, usize)>,
+    pub primary_language: Option<String>,
+    pub architecture: String,
+    pub top_dirs: Vec<(String, usize)>,
+    pub entrypoints: Vec<String>,
+    pub key_symbols: Vec<String>,
+    pub naming_style: String,
+    pub test_pattern: String,
+    pub total_files: usize,
+    pub total_symbols: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AffectedEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub depth: usize,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AffectedResult {
+    pub symbol: String,
+    pub entries: Vec<AffectedEntry>,
+    pub test_files: Vec<String>,
+    pub risk: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SmartTestEntry {
+    pub test_name: String,
+    pub test_path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SmartTestResult {
+    pub changed_symbols: Vec<String>,
+    pub tests: Vec<SmartTestEntry>,
+    pub total_tests_in_project: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReviewResult {
+    pub changed_files: Vec<String>,
+    pub changed_symbols: Vec<String>,
+    pub missing_co_changes: Vec<String>,
+    pub untested_changes: Vec<String>,
+    pub risk: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CouplingEntry {
+    pub path: String,
+    pub fan_in: usize,
+    pub fan_out: usize,
+    pub co_change_count: usize,
+    pub risk_score: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct HotspotEntry {
     pub name: String,
     pub path: String,
@@ -1491,6 +1556,516 @@ impl KungfuService {
         entries.truncate(top);
         Ok(entries)
     }
+
+    /// Generate a project onboarding summary: architecture, patterns, entrypoints, naming.
+    pub fn onboard(&self) -> Result<OnboardInfo> {
+        self.ensure_fresh_index()?;
+        let store = self.store();
+        let files = store.load_files()?;
+        let symbols = store.load_symbols()?;
+        let relations = store.load_relations()?;
+
+        // Languages
+        let mut lang_counts: HashMap<String, usize> = HashMap::new();
+        for f in &files {
+            if let Some(ref lang) = f.language {
+                *lang_counts.entry(lang.clone()).or_default() += 1;
+            }
+        }
+        let mut languages: Vec<(String, usize)> = lang_counts.into_iter().collect();
+        languages.sort_by(|a, b| b.1.cmp(&a.1));
+        let primary_language = detect_primary_language(&files);
+
+        // Top directories
+        let mut dir_counts: HashMap<String, usize> = HashMap::new();
+        for f in &files {
+            if let Some(dir) = Path::new(&f.path).parent() {
+                let dir_str = dir.to_string_lossy().to_string();
+                if !dir_str.is_empty() {
+                    let top = dir_str.split('/').next().unwrap_or(&dir_str).to_string();
+                    *dir_counts.entry(top).or_default() += 1;
+                }
+            }
+        }
+        let mut top_dirs: Vec<(String, usize)> = dir_counts.into_iter().collect();
+        top_dirs.sort_by(|a, b| b.1.cmp(&a.1));
+        top_dirs.truncate(15);
+
+        // Entrypoints
+        let entrypoints: Vec<String> = files
+            .iter()
+            .filter(|f| {
+                let p = &f.path;
+                p.ends_with("main.rs") || p.ends_with("lib.rs")
+                    || p.ends_with("index.ts") || p.ends_with("index.js")
+                    || p.ends_with("main.py") || p.ends_with("main.go")
+                    || p.ends_with("app.ts") || p.ends_with("app.js")
+                    || p == "package.json" || p == "Cargo.toml"
+                    || p == "go.mod" || p == "pyproject.toml"
+            })
+            .map(|f| f.path.clone())
+            .collect();
+
+        // Architecture detection
+        let architecture = detect_architecture(&files, &symbols);
+
+        // Key symbols (most connected)
+        let mut symbol_connections: HashMap<String, usize> = HashMap::new();
+        for r in &relations {
+            *symbol_connections.entry(r.source_id.clone()).or_default() += 1;
+            *symbol_connections.entry(r.target_id.clone()).or_default() += 1;
+        }
+        let symbol_map: HashMap<&str, &Symbol> = symbols.iter().map(|s| (s.id.as_str(), s)).collect();
+        let mut connected: Vec<(&str, usize)> = symbol_connections.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        connected.sort_by(|a, b| b.1.cmp(&a.1));
+        let key_symbols: Vec<String> = connected
+            .iter()
+            .take(10)
+            .filter_map(|(id, _)| symbol_map.get(id).map(|s| {
+                if let Some(ref sig) = s.signature {
+                    format!("[{}] {}", s.path, sig)
+                } else {
+                    format!("[{}] {}", s.path, s.name)
+                }
+            }))
+            .collect();
+
+        // Naming style detection
+        let naming_style = detect_naming_style(&symbols);
+
+        // Test pattern detection
+        let test_pattern = detect_test_pattern(&files);
+
+        Ok(OnboardInfo {
+            project_name: self.project.meta.name.clone(),
+            languages,
+            primary_language,
+            architecture,
+            top_dirs,
+            entrypoints,
+            key_symbols,
+            naming_style,
+            test_pattern,
+            total_files: files.len(),
+            total_symbols: symbols.len(),
+        })
+    }
+
+    /// Blast radius analysis: find all transitive callers/dependents of a symbol.
+    pub fn affected(&self, name: &str, depth: usize) -> Result<AffectedResult> {
+        self.ensure_fresh_index()?;
+        let store = self.store();
+        let files = store.load_files()?;
+        let relations = store.load_relations()?;
+        let all_symbols = self.search().get_all_symbols()?;
+
+        // Find target symbol IDs
+        let target_ids: HashSet<String> = all_symbols
+            .iter()
+            .filter(|s| s.name == name)
+            .map(|s| s.id.clone())
+            .collect();
+
+        if target_ids.is_empty() {
+            bail!("symbol '{}' not found", name);
+        }
+
+        // Build unified ID → path map (both file and symbol IDs)
+        let mut id_to_path: HashMap<&str, &str> = HashMap::new();
+        for f in &files {
+            id_to_path.insert(&f.id, &f.path);
+        }
+        let symbol_map: HashMap<&str, &Symbol> = all_symbols.iter().map(|s| {
+            id_to_path.insert(&s.id, &s.path);
+            (s.id.as_str(), s)
+        }).collect();
+
+        // Build reverse dependency graph: target_id → source_ids (Calls + Imports)
+        let mut reverse_deps: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+        for r in &relations {
+            match r.kind {
+                RelationKind::Calls => {
+                    reverse_deps.entry(r.target_id.as_str()).or_default().push((r.source_id.as_str(), "calls"));
+                }
+                RelationKind::Imports => {
+                    reverse_deps.entry(r.target_id.as_str()).or_default().push((r.source_id.as_str(), "imports"));
+                }
+                _ => {}
+            }
+        }
+
+        // BFS through reverse dependency graph
+        let mut entries: Vec<AffectedEntry> = Vec::new();
+        let mut visited: HashSet<String> = target_ids.clone();
+        let mut frontier: Vec<(String, usize)> = target_ids.iter().map(|id| (id.clone(), 0)).collect();
+
+        // Also collect target file IDs (for file-level relation matching)
+        let target_paths: HashSet<&str> = target_ids.iter()
+            .filter_map(|id| id_to_path.get(id.as_str()).copied())
+            .collect();
+        // Add file IDs that map to target paths
+        for f in &files {
+            if target_paths.contains(f.path.as_str()) && !visited.contains(&f.id) {
+                frontier.push((f.id.clone(), 0));
+                visited.insert(f.id.clone());
+            }
+        }
+
+        while let Some((current_id, current_depth)) = frontier.pop() {
+            if current_depth >= depth {
+                continue;
+            }
+            if let Some(deps) = reverse_deps.get(current_id.as_str()) {
+                for &(dep_id, reason_kind) in deps {
+                    if visited.insert(dep_id.to_string()) {
+                        let (entry_name, entry_path, entry_kind) = if let Some(sym) = symbol_map.get(dep_id) {
+                            (sym.name.clone(), sym.path.clone(), sym.kind.to_string())
+                        } else if let Some(&path) = id_to_path.get(dep_id) {
+                            let fname = path.rsplit('/').next().unwrap_or(path).to_string();
+                            (fname, path.to_string(), "file".to_string())
+                        } else {
+                            continue;
+                        };
+                        entries.push(AffectedEntry {
+                            name: entry_name,
+                            path: entry_path,
+                            kind: entry_kind,
+                            depth: current_depth + 1,
+                            reason: format!("{} {} (depth {})", reason_kind, name, current_depth + 1),
+                        });
+                        frontier.push((dep_id.to_string(), current_depth + 1));
+                    }
+                }
+            }
+        }
+
+        // Find affected test files via TestFor relations (file-level)
+        let affected_paths: HashSet<&str> = entries.iter().map(|e| e.path.as_str())
+            .chain(target_paths.iter().copied())
+            .collect();
+        let mut test_files: Vec<String> = Vec::new();
+        for r in &relations {
+            if r.kind == RelationKind::TestFor {
+                let source_path = id_to_path.get(r.source_id.as_str()).copied().unwrap_or("");
+                let target_path = id_to_path.get(r.target_id.as_str()).copied().unwrap_or("");
+                if !target_path.is_empty() && affected_paths.contains(target_path) {
+                    if !source_path.is_empty() && !test_files.contains(&source_path.to_string()) {
+                        test_files.push(source_path.to_string());
+                    }
+                }
+            }
+        }
+
+        // Risk assessment
+        let risk = if entries.len() > 20 || test_files.len() > 5 {
+            "HIGH".to_string()
+        } else if entries.len() > 5 || test_files.len() > 2 {
+            "MEDIUM".to_string()
+        } else {
+            "LOW".to_string()
+        };
+
+        entries.sort_by_key(|e| e.depth);
+
+        Ok(AffectedResult {
+            symbol: name.to_string(),
+            entries,
+            test_files,
+            risk,
+        })
+    }
+
+    /// Find minimal set of tests to run based on git diff.
+    pub fn smart_test(&self) -> Result<SmartTestResult> {
+        self.ensure_fresh_index()?;
+        if !kungfu_git::is_git_repo(&self.project.root) {
+            bail!("not a git repository");
+        }
+
+        let store = self.store();
+        let all_symbols = store.load_symbols()?;
+        let relations = store.load_relations()?;
+
+        // Get changed line ranges
+        let changed_lines = kungfu_git::diff_changed_lines(&self.project.root)?;
+        if changed_lines.is_empty() {
+            return Ok(SmartTestResult {
+                changed_symbols: vec![],
+                tests: vec![],
+                total_tests_in_project: count_test_symbols(&all_symbols),
+            });
+        }
+
+        // Find symbols that overlap with changed lines
+        let mut changed_symbols: Vec<String> = Vec::new();
+        let mut changed_symbol_ids: HashSet<String> = HashSet::new();
+        let mut changed_file_paths: HashSet<String> = HashSet::new();
+
+        for (file_path, ranges) in &changed_lines {
+            changed_file_paths.insert(file_path.clone());
+            for sym in &all_symbols {
+                if sym.path == *file_path {
+                    for &(start, end) in ranges {
+                        if sym.span.start_line <= end && sym.span.end_line >= start {
+                            if changed_symbol_ids.insert(sym.id.clone()) {
+                                changed_symbols.push(format!("{}::{}", sym.path, sym.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Find test symbols via call graph and test_for relations
+        let mut test_entries: Vec<SmartTestEntry> = Vec::new();
+        let mut seen_tests: HashSet<String> = HashSet::new();
+
+        // Build reverse call graph
+        let mut reverse_calls: HashMap<&str, Vec<&str>> = HashMap::new();
+        for r in &relations {
+            if r.kind == RelationKind::Calls {
+                reverse_calls.entry(r.target_id.as_str()).or_default().push(r.source_id.as_str());
+            }
+        }
+
+        let symbol_map: HashMap<&str, &Symbol> = all_symbols.iter().map(|s| (s.id.as_str(), s)).collect();
+
+        // Direct: test_for relations pointing to changed files
+        for r in &relations {
+            if r.kind == RelationKind::TestFor {
+                if let Some(target_sym) = symbol_map.get(r.target_id.as_str()) {
+                    if changed_file_paths.contains(&target_sym.path) {
+                        if let Some(source_sym) = symbol_map.get(r.source_id.as_str()) {
+                            let key = format!("{}::{}", source_sym.path, source_sym.name);
+                            if seen_tests.insert(key) {
+                                test_entries.push(SmartTestEntry {
+                                    test_name: source_sym.name.clone(),
+                                    test_path: source_sym.path.clone(),
+                                    reason: format!("test_for {}", target_sym.path),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Call graph: find test functions that call changed symbols (1 hop)
+        for changed_id in &changed_symbol_ids {
+            if let Some(callers) = reverse_calls.get(changed_id.as_str()) {
+                for &caller_id in callers {
+                    if let Some(caller) = symbol_map.get(caller_id) {
+                        if is_test_symbol(caller) {
+                            let key = format!("{}::{}", caller.path, caller.name);
+                            if seen_tests.insert(key) {
+                                let changed_name = symbol_map.get(changed_id.as_str())
+                                    .map(|s| s.name.as_str())
+                                    .unwrap_or("?");
+                                test_entries.push(SmartTestEntry {
+                                    test_name: caller.name.clone(),
+                                    test_path: caller.path.clone(),
+                                    reason: format!("calls changed symbol {}", changed_name),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also include test files in the same directory as changed files
+        let changed_dirs: HashSet<&str> = changed_file_paths.iter()
+            .filter_map(|p| p.rsplit_once('/').map(|(dir, _)| dir))
+            .collect();
+
+        for sym in &all_symbols {
+            if is_test_symbol(sym) {
+                if let Some((dir, _)) = sym.path.rsplit_once('/') {
+                    if changed_dirs.contains(dir) {
+                        let key = format!("{}::{}", sym.path, sym.name);
+                        if seen_tests.insert(key) {
+                            test_entries.push(SmartTestEntry {
+                                test_name: sym.name.clone(),
+                                test_path: sym.path.clone(),
+                                reason: "co-located test".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(SmartTestResult {
+            changed_symbols,
+            tests: test_entries,
+            total_tests_in_project: count_test_symbols(&all_symbols),
+        })
+    }
+
+    /// Code review context: analyze diff for risks, missing co-changes, untested code.
+    pub fn review(&self) -> Result<ReviewResult> {
+        self.ensure_fresh_index()?;
+        if !kungfu_git::is_git_repo(&self.project.root) {
+            bail!("not a git repository");
+        }
+
+        let store = self.store();
+        let all_symbols = store.load_symbols()?;
+        let relations = store.load_relations()?;
+
+        // Changed files
+        let changed_files = kungfu_git::diff_files(&self.project.root)?;
+        if changed_files.is_empty() {
+            return Ok(ReviewResult {
+                changed_files: vec![],
+                changed_symbols: vec![],
+                missing_co_changes: vec![],
+                untested_changes: vec![],
+                risk: "NONE".to_string(),
+                summary: "No changes detected".to_string(),
+            });
+        }
+
+        // Changed symbols
+        let changed_lines = kungfu_git::diff_changed_lines(&self.project.root)?;
+        let mut changed_symbols: Vec<String> = Vec::new();
+        let changed_file_set: HashSet<&str> = changed_files.iter().map(|s| s.as_str()).collect();
+
+        for (file_path, ranges) in &changed_lines {
+            for sym in &all_symbols {
+                if sym.path == *file_path {
+                    for &(start, end) in ranges {
+                        if sym.span.start_line <= end && sym.span.end_line >= start {
+                            changed_symbols.push(format!("{}::{}", sym.path, sym.name));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Co-change analysis: find files that usually change together
+        let co_changes = kungfu_git::co_change_pairs(&self.project.root, 3).unwrap_or_default();
+        let mut missing_co_changes: Vec<String> = Vec::new();
+        for file in &changed_files {
+            if let Some(partners) = co_changes.get(file) {
+                for (partner, count) in partners.iter().take(5) {
+                    if !changed_file_set.contains(partner.as_str()) {
+                        missing_co_changes.push(format!("{} (co-changed {}x with {})", partner, count, file));
+                    }
+                }
+            }
+        }
+        missing_co_changes.sort();
+        missing_co_changes.dedup();
+
+        // Find untested changes
+        let symbol_map: HashMap<&str, &Symbol> = all_symbols.iter().map(|s| (s.id.as_str(), s)).collect();
+        let mut tested_paths: HashSet<&str> = HashSet::new();
+        for r in &relations {
+            if r.kind == RelationKind::TestFor {
+                if let Some(target) = symbol_map.get(r.target_id.as_str()) {
+                    tested_paths.insert(&target.path);
+                }
+            }
+        }
+
+        let untested_changes: Vec<String> = changed_files
+            .iter()
+            .filter(|f| {
+                let is_code = f.ends_with(".rs") || f.ends_with(".ts") || f.ends_with(".js")
+                    || f.ends_with(".py") || f.ends_with(".go");
+                let is_test = f.contains("test") || f.contains("spec");
+                is_code && !is_test && !tested_paths.contains(f.as_str())
+            })
+            .cloned()
+            .collect();
+
+        // Risk assessment
+        let risk = if changed_files.len() > 10 || !missing_co_changes.is_empty() && untested_changes.len() > 3 {
+            "HIGH"
+        } else if changed_files.len() > 5 || !missing_co_changes.is_empty() || !untested_changes.is_empty() {
+            "MEDIUM"
+        } else {
+            "LOW"
+        };
+
+        let summary = format!(
+            "{} files changed, {} symbols modified, {} missing co-changes, {} untested",
+            changed_files.len(), changed_symbols.len(),
+            missing_co_changes.len(), untested_changes.len()
+        );
+
+        Ok(ReviewResult {
+            changed_files,
+            changed_symbols,
+            missing_co_changes,
+            untested_changes,
+            risk: risk.to_string(),
+            summary,
+        })
+    }
+
+    /// Analyze module coupling: fan-in, fan-out, co-change frequency.
+    pub fn coupling(&self, top: usize) -> Result<Vec<CouplingEntry>> {
+        self.ensure_fresh_index()?;
+        let store = self.store();
+        let files = store.load_files()?;
+        let relations = store.load_relations()?;
+
+        // Build ID → path maps for both files and symbols
+        let all_symbols = store.load_symbols()?;
+        let mut id_to_path: HashMap<&str, &str> = HashMap::new();
+        for f in &files {
+            id_to_path.insert(&f.id, &f.path);
+        }
+        for s in &all_symbols {
+            id_to_path.insert(&s.id, &s.path);
+        }
+
+        let mut fan_in: HashMap<String, usize> = HashMap::new();
+        let mut fan_out: HashMap<String, usize> = HashMap::new();
+
+        for r in &relations {
+            // Count all structural relations (imports, calls, config_for, test_for)
+            let source_file = id_to_path.get(r.source_id.as_str()).copied().unwrap_or("");
+            let target_file = id_to_path.get(r.target_id.as_str()).copied().unwrap_or("");
+            if !source_file.is_empty() && !target_file.is_empty() && source_file != target_file {
+                *fan_out.entry(source_file.to_string()).or_default() += 1;
+                *fan_in.entry(target_file.to_string()).or_default() += 1;
+            }
+        }
+
+        // Co-change counts
+        let co_changes = if kungfu_git::is_git_repo(&self.project.root) {
+            kungfu_git::co_change_pairs(&self.project.root, 2).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
+        let mut entries: Vec<CouplingEntry> = files
+            .iter()
+            .filter(|f| f.language.as_deref().map(is_code_language).unwrap_or(false))
+            .map(|f| {
+                let fi = *fan_in.get(&f.path).unwrap_or(&0);
+                let fo = *fan_out.get(&f.path).unwrap_or(&0);
+                let co = co_changes.get(&f.path).map(|v| v.len()).unwrap_or(0);
+                let risk_score = (fi as f64 * 0.4) + (fo as f64 * 0.3) + (co as f64 * 0.3);
+                CouplingEntry {
+                    path: f.path.clone(),
+                    fan_in: fi,
+                    fan_out: fo,
+                    co_change_count: co,
+                    risk_score,
+                }
+            })
+            .filter(|e| e.fan_in > 0 || e.fan_out > 0)
+            .collect();
+
+        entries.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+        entries.truncate(top);
+        Ok(entries)
+    }
 }
 
 /// Extract lines from a symbol body that contain query keywords, with 1 line of context.
@@ -1709,6 +2284,122 @@ mod tests {
     }
 
     #[test]
+    fn architecture_detection_workspace() {
+        let files = vec![
+            FileEntry {
+                id: "1".into(), path: "crates/core/src/lib.rs".into(), extension: Some("rs".into()),
+                language: Some("rust".into()), size: 100, hash: "h1".into(),
+                indexed_at: Default::default(), tags: vec![],
+            },
+        ];
+        let result = detect_architecture(&files, &[]);
+        assert!(result.contains("Workspace"), "got: {}", result);
+    }
+
+    #[test]
+    fn architecture_detection_mvc() {
+        let files = vec![
+            FileEntry {
+                id: "1".into(), path: "src/controller/auth.ts".into(), extension: Some("ts".into()),
+                language: Some("typescript".into()), size: 100, hash: "h1".into(),
+                indexed_at: Default::default(), tags: vec![],
+            },
+            FileEntry {
+                id: "2".into(), path: "src/service/auth.ts".into(), extension: Some("ts".into()),
+                language: Some("typescript".into()), size: 100, hash: "h2".into(),
+                indexed_at: Default::default(), tags: vec![],
+            },
+            FileEntry {
+                id: "3".into(), path: "src/model/user.ts".into(), extension: Some("ts".into()),
+                language: Some("typescript".into()), size: 100, hash: "h3".into(),
+                indexed_at: Default::default(), tags: vec![],
+            },
+        ];
+        let result = detect_architecture(&files, &[]);
+        assert!(result.contains("MVC") || result.contains("Layered"), "got: {}", result);
+    }
+
+    #[test]
+    fn naming_style_snake() {
+        use kungfu_types::symbol::{SymbolKind, Span};
+        let symbols = vec![
+            Symbol {
+                id: "1".into(), file_id: "f1".into(), name: "my_function".into(),
+                kind: SymbolKind::Function, language: "rust".into(), path: "a.rs".into(),
+                signature: None, span: Span { start_line: 1, end_line: 5, start_col: 0, end_col: 0 },
+                parent_symbol_id: None, exported: true, visibility: None, doc_summary: None,
+            },
+            Symbol {
+                id: "2".into(), file_id: "f1".into(), name: "another_func".into(),
+                kind: SymbolKind::Function, language: "rust".into(), path: "a.rs".into(),
+                signature: None, span: Span { start_line: 6, end_line: 10, start_col: 0, end_col: 0 },
+                parent_symbol_id: None, exported: true, visibility: None, doc_summary: None,
+            },
+        ];
+        let result = detect_naming_style(&symbols);
+        assert!(result.contains("snake_case"), "got: {}", result);
+    }
+
+    #[test]
+    fn naming_style_camel() {
+        use kungfu_types::symbol::{SymbolKind, Span};
+        let symbols = vec![
+            Symbol {
+                id: "1".into(), file_id: "f1".into(), name: "myFunction".into(),
+                kind: SymbolKind::Function, language: "ts".into(), path: "a.ts".into(),
+                signature: None, span: Span { start_line: 1, end_line: 5, start_col: 0, end_col: 0 },
+                parent_symbol_id: None, exported: true, visibility: None, doc_summary: None,
+            },
+            Symbol {
+                id: "2".into(), file_id: "f1".into(), name: "anotherFunc".into(),
+                kind: SymbolKind::Function, language: "ts".into(), path: "a.ts".into(),
+                signature: None, span: Span { start_line: 6, end_line: 10, start_col: 0, end_col: 0 },
+                parent_symbol_id: None, exported: true, visibility: None, doc_summary: None,
+            },
+        ];
+        let result = detect_naming_style(&symbols);
+        assert!(result.contains("camelCase"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_pattern_detection() {
+        let files = vec![
+            FileEntry {
+                id: "1".into(), path: "src/auth.ts".into(), extension: Some("ts".into()),
+                language: Some("typescript".into()), size: 100, hash: "h1".into(),
+                indexed_at: Default::default(), tags: vec![],
+            },
+            FileEntry {
+                id: "2".into(), path: "tests/auth.test.ts".into(), extension: Some("ts".into()),
+                language: Some("typescript".into()), size: 100, hash: "h2".into(),
+                indexed_at: Default::default(), tags: vec![],
+            },
+        ];
+        let result = detect_test_pattern(&files);
+        assert!(result.contains("test"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_is_test_symbol() {
+        use kungfu_types::symbol::{SymbolKind, Span};
+        let sym = Symbol {
+            id: "1".into(), file_id: "f1".into(), name: "test_something".into(),
+            kind: SymbolKind::Function, language: "rust".into(), path: "src/lib.rs".into(),
+            signature: None, span: Span { start_line: 1, end_line: 5, start_col: 0, end_col: 0 },
+            parent_symbol_id: None, exported: false, visibility: None, doc_summary: None,
+        };
+        assert!(is_test_symbol(&sym));
+
+        let sym2 = Symbol {
+            id: "2".into(), file_id: "f1".into(), name: "do_work".into(),
+            kind: SymbolKind::Function, language: "rust".into(), path: "src/lib.rs".into(),
+            signature: None, span: Span { start_line: 6, end_line: 10, start_col: 0, end_col: 0 },
+            parent_symbol_id: None, exported: true, visibility: None, doc_summary: None,
+        };
+        assert!(!is_test_symbol(&sym2));
+    }
+
+    #[test]
     fn primary_language_detection() {
         let files = vec![
             FileEntry {
@@ -1729,6 +2420,107 @@ mod tests {
         ];
         assert_eq!(detect_primary_language(&files), Some("rust".to_string()));
     }
+}
+
+fn detect_architecture(files: &[FileEntry], _symbols: &[Symbol]) -> String {
+    let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+
+    // Check for common patterns
+    let has_src = paths.iter().any(|p| p.starts_with("src/"));
+    let has_crates = paths.iter().any(|p| p.starts_with("crates/"));
+    let has_packages = paths.iter().any(|p| p.starts_with("packages/"));
+    let has_cmd = paths.iter().any(|p| p.starts_with("cmd/"));
+    let has_internal = paths.iter().any(|p| p.starts_with("internal/"));
+    let has_controllers = paths.iter().any(|p| p.contains("controller") || p.contains("handler"));
+    let has_services = paths.iter().any(|p| p.contains("service"));
+    let has_models = paths.iter().any(|p| p.contains("model") || p.contains("entity"));
+    let has_routes = paths.iter().any(|p| p.contains("route") || p.contains("router"));
+    let has_components = paths.iter().any(|p| p.contains("component"));
+
+    if has_crates || has_packages {
+        "Workspace / Monorepo — multiple crates/packages".to_string()
+    } else if has_cmd && has_internal {
+        "Go-style — cmd/ for binaries, internal/ for packages".to_string()
+    } else if has_controllers && has_services && has_models {
+        "MVC / Layered — controllers, services, models".to_string()
+    } else if has_routes && has_services {
+        "Service-oriented — routes + services".to_string()
+    } else if has_components {
+        "Component-based — UI components".to_string()
+    } else if has_src {
+        "Standard — src/ based".to_string()
+    } else {
+        "Flat / Custom".to_string()
+    }
+}
+
+fn detect_naming_style(symbols: &[Symbol]) -> String {
+    let mut snake = 0;
+    let mut camel = 0;
+    let mut pascal = 0;
+
+    for s in symbols {
+        let name = &s.name;
+        if name.contains('_') && name == &name.to_lowercase() {
+            snake += 1;
+        } else if name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) && name.contains(char::is_uppercase) {
+            camel += 1;
+        } else if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            pascal += 1;
+        }
+    }
+
+    let total = snake + camel + pascal;
+    if total == 0 {
+        return "unknown".to_string();
+    }
+
+    let mut styles = vec![];
+    if snake > total / 4 { styles.push(format!("snake_case ({}%)", snake * 100 / total)); }
+    if camel > total / 4 { styles.push(format!("camelCase ({}%)", camel * 100 / total)); }
+    if pascal > total / 4 { styles.push(format!("PascalCase ({}%)", pascal * 100 / total)); }
+
+    if styles.is_empty() {
+        "mixed".to_string()
+    } else {
+        styles.join(", ")
+    }
+}
+
+fn detect_test_pattern(files: &[FileEntry]) -> String {
+    let test_files: Vec<&str> = files.iter()
+        .map(|f| f.path.as_str())
+        .filter(|p| p.contains("test") || p.contains("spec"))
+        .collect();
+
+    if test_files.is_empty() {
+        return "no tests detected".to_string();
+    }
+
+    let co_located = test_files.iter().any(|p| !p.starts_with("test") && !p.starts_with("tests") && !p.starts_with("__tests__"));
+    let separate_dir = test_files.iter().any(|p| p.starts_with("test") || p.starts_with("tests") || p.starts_with("__tests__"));
+    let spec_style = test_files.iter().any(|p| p.contains(".spec."));
+    let test_suffix = test_files.iter().any(|p| p.contains(".test.") || p.contains("_test."));
+
+    let mut patterns = vec![];
+    if co_located { patterns.push("co-located"); }
+    if separate_dir { patterns.push("tests/ directory"); }
+    if spec_style { patterns.push("*.spec.* naming"); }
+    if test_suffix { patterns.push("*.test.* / *_test.* naming"); }
+
+    format!("{} test files — {}", test_files.len(), patterns.join(", "))
+}
+
+fn is_test_symbol(sym: &Symbol) -> bool {
+    sym.name.starts_with("test_")
+        || sym.name.starts_with("Test")
+        || sym.name.contains("_test")
+        || sym.path.contains("test")
+        || sym.path.contains("spec")
+}
+
+fn count_test_symbols(symbols: &[Symbol]) -> usize {
+    symbols.iter().filter(|s| is_test_symbol(s)).count()
 }
 
 fn is_stop_word(word: &str) -> bool {

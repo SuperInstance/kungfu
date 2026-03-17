@@ -251,6 +251,20 @@ pub struct HotspotsParam {
     pub files: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AffectedParam {
+    /// Symbol name to analyze blast radius for
+    pub name: String,
+    /// Max depth of transitive analysis. Default: 3
+    pub depth: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CouplingParam {
+    /// Number of results to return. Default: 20
+    pub top: Option<usize>,
+}
+
 fn parse_budget(s: Option<&str>) -> Budget {
     s.and_then(|s| s.parse().ok()).unwrap_or(Budget::Auto)
 }
@@ -750,6 +764,58 @@ impl KungfuMcp {
         let service = self.service()?;
         let entries = service.hotspots(top, churn, files).map_err(|e| e.to_string())?;
         serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Generate project onboarding summary: architecture, patterns, key symbols, naming conventions, test structure. Perfect for system prompts and CLAUDE.md")]
+    fn onboard(&self) -> Result<String, String> {
+        self.cached("onboard", "", "", || {
+            let service = self.service()?;
+            let info = service.onboard().map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+        })
+    }
+
+    #[tool(description = "Blast radius analysis: find all transitive callers and dependents of a symbol. Shows affected code, test files, and risk level (LOW/MEDIUM/HIGH)")]
+    fn affected(
+        &self,
+        Parameters(params): Parameters<AffectedParam>,
+    ) -> Result<String, String> {
+        let depth = params.depth.unwrap_or(3);
+        let name = params.name.clone();
+        self.cached("affected", &name, &depth.to_string(), || {
+            let service = self.service()?;
+            let result = service.affected(&name, depth).map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+        })
+    }
+
+    #[tool(description = "Find minimal set of tests to run based on git diff. Analyzes changed symbols, traces call graph to test functions, returns specific test names")]
+    fn smart_test(&self) -> Result<String, String> {
+        // No cache — depends on current diff state
+        let service = self.service()?;
+        let result = service.smart_test().map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Code review context for current git diff: changed symbols, missing co-changes (files that usually change together), untested code, risk assessment")]
+    fn review(&self) -> Result<String, String> {
+        // No cache — depends on current diff state
+        let service = self.service()?;
+        let result = service.review().map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Analyze module coupling: fan-in (who depends on this), fan-out (what this depends on), co-change frequency. Identifies fragile modules with high risk")]
+    fn coupling(
+        &self,
+        Parameters(params): Parameters<CouplingParam>,
+    ) -> Result<String, String> {
+        let top = params.top.unwrap_or(20);
+        self.cached("coupling", &top.to_string(), "", || {
+            let service = self.service()?;
+            let entries = service.coupling(top).map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())
+        })
     }
 
     #[tool(description = "Find symbols related to a given symbol by name, path, or structural proximity")]

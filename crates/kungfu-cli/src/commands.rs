@@ -421,6 +421,188 @@ pub fn stats(json: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn onboard(json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let info = service.onboard()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&info)?);
+    } else {
+        println!("# {}", info.project_name);
+        println!();
+        println!("## Overview");
+        println!("  Files:   {}  |  Symbols: {}", info.total_files, info.total_symbols);
+        if let Some(ref primary) = info.primary_language {
+            println!("  Primary: {}", primary);
+        }
+        println!();
+        println!("## Architecture");
+        println!("  {}", info.architecture);
+        println!();
+        println!("## Languages");
+        for (lang, count) in &info.languages {
+            println!("  {:<15} {:>5} files", lang, count);
+        }
+        println!();
+        println!("## Structure");
+        for (dir, count) in &info.top_dirs {
+            println!("  {:<30} {:>5} files", format!("{}/", dir), count);
+        }
+        println!();
+        println!("## Entry Points");
+        for ep in &info.entrypoints {
+            println!("  {}", ep);
+        }
+        println!();
+        println!("## Key Symbols (most connected)");
+        for sym in &info.key_symbols {
+            println!("  {}", sym);
+        }
+        println!();
+        println!("## Naming: {}", info.naming_style);
+        println!("## Tests:  {}", info.test_pattern);
+    }
+    Ok(())
+}
+
+pub fn affected(name: &str, depth: usize, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.affected(name, depth)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("Blast radius for: {}", result.symbol);
+        println!("Risk: {}", result.risk);
+        println!();
+        if result.entries.is_empty() {
+            println!("  No affected symbols found.");
+        } else {
+            println!("{:<4} {:<30} {:<50} {:<10} {}", "#", "Symbol", "Path", "Kind", "Reason");
+            println!("{}", "-".repeat(110));
+            for (i, e) in result.entries.iter().enumerate() {
+                println!(
+                    "{:<4} {:<30} {:<50} {:<10} {}",
+                    i + 1,
+                    truncate_str(&e.name, 29),
+                    truncate_str(&e.path, 49),
+                    e.kind,
+                    e.reason,
+                );
+            }
+        }
+        if !result.test_files.is_empty() {
+            println!();
+            println!("Affected test files:");
+            for t in &result.test_files {
+                println!("  {}", t);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn smart_test(json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.smart_test()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        if result.changed_symbols.is_empty() {
+            println!("No changes detected in git diff.");
+            return Ok(());
+        }
+        println!("Changed symbols:");
+        for s in &result.changed_symbols {
+            println!("  {}", s);
+        }
+        println!();
+        if result.tests.is_empty() {
+            println!("No relevant tests found.");
+        } else {
+            println!("Run these {} tests (of {} total):", result.tests.len(), result.total_tests_in_project);
+            println!();
+            for t in &result.tests {
+                println!("  {}::{}", t.test_path, t.test_name);
+                println!("    reason: {}", t.reason);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn review(json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let result = service.review()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("=== Code Review Context ===");
+        println!("Risk: {}", result.risk);
+        println!("{}", result.summary);
+        println!();
+        if !result.changed_files.is_empty() {
+            println!("Changed files:");
+            for f in &result.changed_files {
+                println!("  {}", f);
+            }
+        }
+        if !result.changed_symbols.is_empty() {
+            println!();
+            println!("Changed symbols:");
+            for s in &result.changed_symbols {
+                println!("  {}", s);
+            }
+        }
+        if !result.missing_co_changes.is_empty() {
+            println!();
+            println!("Missing co-changes (usually change together):");
+            for m in &result.missing_co_changes {
+                println!("  ⚠ {}", m);
+            }
+        }
+        if !result.untested_changes.is_empty() {
+            println!();
+            println!("Untested changes:");
+            for u in &result.untested_changes {
+                println!("  ⚠ {}", u);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn coupling(top: usize, json: bool) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let service = KungfuService::open(&cwd)?;
+    let entries = service.coupling(top)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else {
+        println!("{:<4} {:<55} {:>7} {:>8} {:>10} {:>8}", "#", "File", "Fan-in", "Fan-out", "Co-change", "Risk");
+        println!("{}", "-".repeat(96));
+        for (i, e) in entries.iter().enumerate() {
+            println!(
+                "{:<4} {:<55} {:>7} {:>8} {:>10} {:>8.1}",
+                i + 1,
+                truncate_str(&e.path, 54),
+                e.fan_in,
+                e.fan_out,
+                e.co_change_count,
+                e.risk_score,
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn hotspots(top: usize, churn: bool, files: bool, json: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let service = KungfuService::open(&cwd)?;
