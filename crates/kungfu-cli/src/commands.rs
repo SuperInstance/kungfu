@@ -1362,25 +1362,37 @@ pub fn investigate(query: &str, budget: Budget, json: bool) -> Result<()> {
 
 pub fn mcp() -> Result<()> {
     let cwd = env::current_dir()?;
-    let root = kungfu_project::find_project_root(&cwd)?;
+    let root = match kungfu_project::find_project_root(&cwd) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("kungfu: warning: {}", e);
+            eprintln!("kungfu: using current directory as project root");
+            cwd.clone()
+        }
+    };
 
     // Auto-init if not initialized
     if !root.join(".kungfu").exists() {
         eprintln!("kungfu: auto-initializing project...");
-        kungfu_project::init_project(&root)?;
+        if let Err(e) = kungfu_project::init_project(&root) {
+            eprintln!("kungfu: warning: init failed: {}", e);
+        }
     }
 
     // Auto-index if index is empty or missing
-    let service = KungfuService::open(&cwd)?;
-    let index_dir = root.join(".kungfu").join("index");
-    let needs_index = !index_dir.join("symbols.json").exists()
-        || std::fs::metadata(index_dir.join("symbols.json"))
-            .map(|m| m.len() < 10)
-            .unwrap_or(true);
-    if needs_index {
-        eprintln!("kungfu: auto-indexing project...");
-        let stats = service.index_full()?;
-        eprintln!("kungfu: indexed {} files ({} symbols)", stats.total_files, stats.symbols_extracted);
+    if let Ok(service) = KungfuService::open(&root) {
+        let index_dir = root.join(".kungfu").join("index");
+        let needs_index = !index_dir.join("symbols.json").exists()
+            || std::fs::metadata(index_dir.join("symbols.json"))
+                .map(|m| m.len() < 10)
+                .unwrap_or(true);
+        if needs_index {
+            eprintln!("kungfu: auto-indexing project...");
+            match service.index_full() {
+                Ok(stats) => eprintln!("kungfu: indexed {} files ({} symbols)", stats.total_files, stats.symbols_extracted),
+                Err(e) => eprintln!("kungfu: warning: index failed: {}", e),
+            }
+        }
     }
 
     let rt = tokio::runtime::Runtime::new()?;
