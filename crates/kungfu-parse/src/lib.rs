@@ -18,21 +18,9 @@ pub struct RawImport {
     pub line: usize,
 }
 
-/// Raw function call extracted from a symbol body.
-#[derive(Debug, Clone)]
-pub struct RawCall {
-    /// Symbol ID of the caller (the function/method containing the call).
-    pub caller_id: String,
-    /// Name of the called function/method (last segment, e.g. "foo" from "self.foo()").
-    pub callee_name: String,
-    /// Line number of the call.
-    pub line: usize,
-}
-
 pub struct ParseResult {
     pub symbols: Vec<Symbol>,
     pub imports: Vec<RawImport>,
-    pub calls: Vec<RawCall>,
 }
 
 pub struct Parser {
@@ -101,218 +89,18 @@ impl Parser {
             _ => (Vec::new(), Vec::new()),
         };
 
-        let calls = extract_calls(&root, source, &symbols);
-
-        Ok(ParseResult { symbols, imports, calls })
+        Ok(ParseResult { symbols, imports })
     }
-}
-
-/// Extract function calls from symbol bodies using tree-sitter.
-/// Works across all languages by looking for call_expression/call nodes.
-fn extract_calls(root: &tree_sitter::Node, source: &str, symbols: &[Symbol]) -> Vec<RawCall> {
-    let mut calls = Vec::new();
-
-    // Build line→symbol_id mapping for resolving which symbol contains a call
-    let mut line_to_sym: Vec<(&str, usize, usize)> = symbols
-        .iter()
-        .filter(|s| matches!(
-            s.kind,
-            kungfu_types::symbol::SymbolKind::Function
-                | kungfu_types::symbol::SymbolKind::Method
-        ))
-        .map(|s| (s.id.as_str(), s.span.start_line, s.span.end_line))
-        .collect();
-    // Sort by span size (smallest first) so we find the most specific containing function
-    line_to_sym.sort_by_key(|&(_, start, end)| end - start);
-
-    let mut seen = std::collections::HashSet::new();
-    collect_calls(root, source, &line_to_sym, &mut calls, &mut seen);
-    calls
-}
-
-fn collect_calls(
-    node: &tree_sitter::Node,
-    source: &str,
-    line_to_sym: &[(&str, usize, usize)],
-    calls: &mut Vec<RawCall>,
-    seen: &mut std::collections::HashSet<(String, String)>,
-) {
-    let kind = node.kind();
-    // call_expression (Rust, Go, TS, JS) or call (Python)
-    if kind == "call_expression" || kind == "call" {
-        if let Some(callee_name) = extract_callee_name(node, source) {
-            let line = node.start_position().row + 1;
-
-            // Find containing symbol (smallest span that contains this line)
-            if let Some(&(caller_id, _, _)) = line_to_sym
-                .iter()
-                .find(|&&(_, start, end)| line >= start && line <= end)
-            {
-                let key = (caller_id.to_string(), callee_name.clone());
-                if seen.insert(key) {
-                    calls.push(RawCall {
-                        caller_id: caller_id.to_string(),
-                        callee_name,
-                        line,
-                    });
-                }
-            }
-        }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_calls(&child, source, line_to_sym, calls, seen);
-    }
-}
-
-/// Extract the callee function name from a call expression node.
-/// Handles: foo(), self.foo(), obj.method(), Module::func(), etc.
-fn extract_callee_name(node: &tree_sitter::Node, source: &str) -> Option<String> {
-    let func_node = node.child_by_field_name("function")?;
-    let text = source.get(func_node.start_byte()..func_node.end_byte())?;
-
-    // Get the last segment: "self.foo" → "foo", "Module::bar" → "bar", "foo" → "foo"
-    let name = text
-        .rsplit_once('.')
-        .map(|(_, r)| r)
-        .or_else(|| text.rsplit_once("::").map(|(_, r)| r))
-        .unwrap_or(text)
-        .trim();
-
-    // Filter out noise: too short, numeric, or common non-function patterns
-    if name.is_empty() || name.len() > 60 || name.starts_with(|c: char| c.is_ascii_digit()) {
-        return None;
-    }
-
-    Some(name.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse_rust(source: &str) -> ParseResult {
-        let mut parser = Parser::new();
-        parser.parse(source, Language::Rust, "f:test", "test.rs").unwrap()
-    }
-
-    fn parse_python(source: &str) -> ParseResult {
-        let mut parser = Parser::new();
-        parser.parse(source, Language::Python, "f:test", "test.py").unwrap()
-    }
-
-    fn parse_ts(source: &str) -> ParseResult {
-        let mut parser = Parser::new();
-        parser.parse(source, Language::TypeScript, "f:test", "test.ts").unwrap()
-    }
-
-    fn parse_go(source: &str) -> ParseResult {
-        let mut parser = Parser::new();
-        parser.parse(source, Language::Go, "f:test", "test.go").unwrap()
-    }
-
-    // --- Call extraction ---
-
-    #[test]
-    fn rust_extracts_calls() {
-        let result = parse_rust(r#"
-fn foo() {}
-fn bar() {
-    foo();
-}
-"#);
-        assert!(result.calls.iter().any(|c| c.callee_name == "foo"),
-            "should extract call to foo, got: {:?}", result.calls);
-    }
-
-    #[test]
-    fn rust_method_call() {
-        let result = parse_rust(r#"
-fn process() {
-    self.validate();
-    let x = helper();
-}
-fn validate() {}
-fn helper() {}
-"#);
-        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(names.contains(&"validate"), "should find validate call, got: {:?}", names);
-        assert!(names.contains(&"helper"), "should find helper call, got: {:?}", names);
-    }
-
-    #[test]
-    fn rust_no_duplicate_calls() {
-        let result = parse_rust(r#"
-fn work() {
-    foo();
-    foo();
-    foo();
-}
-fn foo() {}
-"#);
-        let foo_calls: Vec<_> = result.calls.iter().filter(|c| c.callee_name == "foo").collect();
-        assert_eq!(foo_calls.len(), 1, "should deduplicate calls to same function");
-    }
-
-    #[test]
-    fn python_extracts_calls() {
-        let result = parse_python(r#"
-def foo():
-    pass
-
-def bar():
-    foo()
-    print("hello")
-"#);
-        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(names.contains(&"foo"), "should find foo call, got: {:?}", names);
-        assert!(names.contains(&"print"), "should find print call, got: {:?}", names);
-    }
-
-    #[test]
-    fn typescript_extracts_calls() {
-        let result = parse_ts(r#"
-function validate(x: string): boolean {
-    return x.length > 0;
-}
-function process(data: string) {
-    validate(data);
-    console.log(data);
-}
-"#);
-        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(names.contains(&"validate"), "should find validate call, got: {:?}", names);
-        assert!(names.contains(&"log"), "should find console.log call, got: {:?}", names);
-    }
-
-    #[test]
-    fn go_extracts_calls() {
-        let result = parse_go(r#"
-package main
-
-func helper() {}
-
-func main() {
-    helper()
-    fmt.Println("hello")
-}
-"#);
-        let names: Vec<&str> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(names.contains(&"helper"), "should find helper call, got: {:?}", names);
-        assert!(names.contains(&"Println"), "should find Println call, got: {:?}", names);
-    }
-
-    // --- Callee name extraction ---
-
-    #[test]
-    fn callee_simple() {
-        // Tested via full parse above
-    }
-
     #[test]
     fn symbols_and_imports_present() {
-        let result = parse_rust(r#"
+        let mut parser = Parser::new();
+        let result = parser.parse(r#"
 use std::path::Path;
 
 pub fn hello() {
@@ -322,7 +110,7 @@ pub fn hello() {
 struct Foo {
     x: i32,
 }
-"#);
+"#, Language::Rust, "f:test", "test.rs").unwrap();
         assert!(result.symbols.iter().any(|s| s.name == "hello"));
         assert!(result.symbols.iter().any(|s| s.name == "Foo"));
         assert!(!result.imports.is_empty());

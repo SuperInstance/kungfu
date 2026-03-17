@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use kungfu_config::KungfuConfig;
-use kungfu_parse::{Parser, RawCall, RawImport};
+use kungfu_parse::{Parser, RawImport};
 use kungfu_storage::JsonStore;
 use kungfu_types::file::{FileEntry, Language};
 use kungfu_types::relation::{Relation, RelationKind};
@@ -45,16 +45,14 @@ impl<'a> Indexer<'a> {
         let mut fingerprints = HashMap::new();
         let mut all_symbols = Vec::new();
         let mut all_imports: Vec<(String, Vec<RawImport>)> = Vec::new();
-        let mut all_calls: Vec<RawCall> = Vec::new();
 
         for path in &paths {
             match self.index_file(path) {
-                Ok((entry, symbols, imports, calls)) => {
+                Ok((entry, symbols, imports)) => {
                     fingerprints.insert(entry.path.clone(), entry.hash.clone());
                     if !imports.is_empty() {
                         all_imports.push((entry.path.clone(), imports));
                     }
-                    all_calls.extend(calls);
                     all_symbols.extend(symbols);
                     files.push(entry);
                 }
@@ -64,7 +62,7 @@ impl<'a> Indexer<'a> {
             }
         }
 
-        let relations = Self::build_relations(&files, &all_imports, &all_symbols, &all_calls);
+        let relations = Self::build_relations(&files, &all_imports);
 
         let stats = IndexStats {
             total_files: files.len(),
@@ -97,7 +95,6 @@ impl<'a> Indexer<'a> {
         let mut new_files = Vec::new();
         let mut new_symbols = Vec::new();
         let mut all_imports: Vec<(String, Vec<RawImport>)> = Vec::new();
-        let mut all_calls: Vec<RawCall> = Vec::new();
 
         let mut stats = IndexStats {
             total_files: 0,
@@ -151,12 +148,11 @@ impl<'a> Indexer<'a> {
             }
 
             match self.index_file_with_content(path, content) {
-                Ok((entry, symbols, imports, calls)) => {
+                Ok((entry, symbols, imports)) => {
                     new_fingerprints.insert(entry.path.clone(), entry.hash.clone());
                     if !imports.is_empty() {
                         all_imports.push((entry.path.clone(), imports));
                     }
-                    all_calls.extend(calls);
                     new_symbols.extend(symbols);
                     new_files.push(entry);
                 }
@@ -176,8 +172,7 @@ impl<'a> Indexer<'a> {
         stats.total_files = new_files.len();
         stats.symbols_extracted = new_symbols.len();
 
-        // Rebuild relations from all imports and calls
-        let relations = Self::build_relations(&new_files, &all_imports, &new_symbols, &all_calls);
+        let relations = Self::build_relations(&new_files, &all_imports);
 
         self.store.save_files(&new_files)?;
         self.store.save_symbols(&new_symbols)?;
@@ -210,7 +205,6 @@ impl<'a> Indexer<'a> {
         let mut new_files: Vec<FileEntry> = Vec::new();
         let mut new_symbols: Vec<Symbol> = Vec::new();
         let mut all_imports: Vec<(String, Vec<RawImport>)> = Vec::new();
-        let mut all_calls: Vec<RawCall> = Vec::new();
 
         let mut stats = IndexStats {
             total_files: 0,
@@ -237,7 +231,6 @@ impl<'a> Indexer<'a> {
         for rel_path in changed_paths {
             let abs_path = self.root.join(rel_path);
             if !abs_path.exists() {
-                // File was deleted
                 new_fingerprints.remove(rel_path);
                 stats.removed_files += 1;
                 continue;
@@ -250,13 +243,12 @@ impl<'a> Indexer<'a> {
             }
 
             match self.index_file(&abs_path) {
-                Ok((entry, symbols, imports, calls)) => {
+                Ok((entry, symbols, imports)) => {
                     new_fingerprints.insert(entry.path.clone(), entry.hash.clone());
                     stats.symbols_extracted += symbols.len();
                     if !imports.is_empty() {
                         all_imports.push((entry.path.clone(), imports));
                     }
-                    all_calls.extend(calls);
                     new_symbols.extend(symbols);
                     new_files.push(entry);
                 }
@@ -278,7 +270,7 @@ impl<'a> Indexer<'a> {
             .into_iter()
             .filter(|r| !changed_file_ids.contains(r.source_id.as_str()))
             .collect();
-        let new_relations = Self::build_relations(&new_files, &all_imports, &new_symbols, &all_calls);
+        let new_relations = Self::build_relations(&new_files, &all_imports);
         relations.extend(new_relations);
 
         self.store.save_files(&new_files)?;
@@ -293,12 +285,12 @@ impl<'a> Indexer<'a> {
         Ok(stats)
     }
 
-    fn index_file(&mut self, path: &Path) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>, Vec<RawCall>)> {
+    fn index_file(&mut self, path: &Path) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>)> {
         let content = std::fs::read(path)?;
         self.index_file_with_content(path, content)
     }
 
-    fn index_file_with_content(&mut self, path: &Path, content: Vec<u8>) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>, Vec<RawCall>)> {
+    fn index_file_with_content(&mut self, path: &Path, content: Vec<u8>) -> Result<(FileEntry, Vec<Symbol>, Vec<RawImport>)> {
         let hash = blake3::hash(&content).to_hex().to_string();
 
         let rel_path = path
@@ -328,38 +320,34 @@ impl<'a> Indexer<'a> {
             tags: Vec::new(),
         };
 
-        // Extract symbols, imports, and calls if it's a code file
-        let (symbols, imports, calls) = if language.is_code() {
+        let (symbols, imports) = if language.is_code() {
             let content_str = String::from_utf8_lossy(&content);
             match self.parser.parse(&content_str, language, &file_id, &rel_path) {
                 Ok(result) => {
                     debug!(
-                        "extracted {} symbols, {} imports, {} calls from {}",
+                        "extracted {} symbols, {} imports from {}",
                         result.symbols.len(),
                         result.imports.len(),
-                        result.calls.len(),
                         rel_path
                     );
-                    (result.symbols, result.imports, result.calls)
+                    (result.symbols, result.imports)
                 }
                 Err(e) => {
                     debug!("parsing failed for {}: {}", rel_path, e);
-                    (Vec::new(), Vec::new(), Vec::new())
+                    (Vec::new(), Vec::new())
                 }
             }
         } else {
-            (Vec::new(), Vec::new(), Vec::new())
+            (Vec::new(), Vec::new())
         };
 
-        Ok((entry, symbols, imports, calls))
+        Ok((entry, symbols, imports))
     }
 
-    /// Resolve collected imports and calls into Relations.
+    /// Resolve collected imports into Relations.
     fn build_relations(
         files: &[FileEntry],
         file_imports: &[(String, Vec<RawImport>)],
-        symbols: &[Symbol],
-        calls: &[RawCall],
     ) -> Vec<Relation> {
         let mut relations = Vec::new();
 
@@ -424,9 +412,6 @@ impl<'a> Indexer<'a> {
         Self::build_test_relations(&files, &mut relations);
         Self::build_config_relations(&files, &mut relations);
 
-        // Build Calls relations from extracted call data
-        Self::build_call_relations(symbols, calls, &mut relations);
-
         // Deduplicate
         relations.sort_by(|a, b| {
             (&a.source_id, &a.target_id, &a.kind)
@@ -441,92 +426,8 @@ impl<'a> Indexer<'a> {
         relations
     }
 
-    /// Resolve extracted calls into Calls relations by matching callee names to known symbols.
-    fn build_call_relations(symbols: &[Symbol], calls: &[RawCall], relations: &mut Vec<Relation>) {
-        // Build name → symbol info lookup (only functions/methods/classes)
-        struct SymInfo<'a> {
-            id: &'a str,
-            file_id: &'a str,
-            path: &'a str,
-        }
-        let mut name_to_syms: HashMap<&str, Vec<SymInfo>> = HashMap::new();
-        for sym in symbols {
-            if matches!(
-                sym.kind,
-                kungfu_types::symbol::SymbolKind::Function
-                    | kungfu_types::symbol::SymbolKind::Method
-                    | kungfu_types::symbol::SymbolKind::Class
-                    | kungfu_types::symbol::SymbolKind::Struct
-            ) {
-                name_to_syms.entry(sym.name.as_str()).or_default().push(SymInfo {
-                    id: &sym.id,
-                    file_id: &sym.file_id,
-                    path: &sym.path,
-                });
-            }
-        }
-
-        // Build caller_id → file_id/path lookup
-        let caller_info: HashMap<&str, (&str, &str)> = symbols.iter()
-            .map(|s| (s.id.as_str(), (s.file_id.as_str(), s.path.as_str())))
-            .collect();
-
-        // Resolve each call with scoping: same-file > same-dir > cross-project
-        for call in calls {
-            if let Some(targets) = name_to_syms.get(call.callee_name.as_str()) {
-                let (caller_file_id, caller_path) = caller_info.get(call.caller_id.as_str())
-                    .copied()
-                    .unwrap_or(("", ""));
-                let caller_dir = caller_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-
-                // Partition targets by proximity
-                let mut same_file: Vec<&SymInfo> = Vec::new();
-                let mut same_dir: Vec<&SymInfo> = Vec::new();
-                let mut other: Vec<&SymInfo> = Vec::new();
-
-                for target in targets {
-                    if target.id == call.caller_id {
-                        continue; // skip self-calls
-                    }
-                    if target.file_id == caller_file_id {
-                        same_file.push(target);
-                    } else {
-                        let target_dir = target.path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-                        if target_dir == caller_dir && !caller_dir.is_empty() {
-                            same_dir.push(target);
-                        } else {
-                            other.push(target);
-                        }
-                    }
-                }
-
-                // Use most specific match: same_file > same_dir > other
-                // Only fall through if no matches at higher specificity
-                let (chosen, weight) = if !same_file.is_empty() {
-                    (same_file, 1.0)
-                } else if !same_dir.is_empty() {
-                    (same_dir, 0.8)
-                } else if other.len() <= 2 {
-                    // Only resolve cross-dir calls if target name is unique enough
-                    (other, 0.5)
-                } else {
-                    // Too many candidates — ambiguous, skip
-                    continue;
-                };
-
-                for target in chosen {
-                    relations.push(Relation {
-                        source_id: call.caller_id.clone(),
-                        target_id: target.id.to_string(),
-                        kind: RelationKind::Calls,
-                        weight: weight as f32,
-                    });
-                }
-            }
-        }
-    }
-
     /// Detect test files and create TestFor relations to their source files.
+    /// Only links when test and source are in nearby directories to avoid explosion.
     fn build_test_relations(files: &[FileEntry], relations: &mut Vec<Relation>) {
         // Build stem→file lookup (only non-test source files)
         let mut source_by_stem: HashMap<String, Vec<&FileEntry>> = HashMap::new();
@@ -543,21 +444,60 @@ impl<'a> Indexer<'a> {
             if !is_test_file(&f.path) {
                 continue;
             }
-            // Extract base stem: foo_test.rs → foo, foo.spec.ts → foo, foo.test.js → foo
             let stem = extract_test_base_stem(&f.path);
             if stem.is_empty() {
                 continue;
             }
 
-            // Find matching source files
             if let Some(sources) = source_by_stem.get(&stem) {
+                let test_dir = Path::new(&f.path)
+                    .parent()
+                    .unwrap_or(Path::new(""))
+                    .to_string_lossy();
+
+                // Score candidates by directory proximity, only keep close ones
+                let mut scored: Vec<(&FileEntry, u8)> = Vec::new();
                 for source in sources {
-                    // Prefer same directory or parent
+                    let src_dir = Path::new(&source.path)
+                        .parent()
+                        .unwrap_or(Path::new(""))
+                        .to_string_lossy();
+
+                    // Same directory (e.g. foo.rs + foo_test.rs)
+                    if src_dir == test_dir {
+                        scored.push((source, 0));
+                    // Sibling: tests/test_foo.py ↔ src/foo.py (share parent)
+                    } else if dirs_share_parent(&test_dir, &src_dir) {
+                        scored.push((source, 1));
+                    // Test dir is child of source dir (e.g. src/foo.rs + src/__tests__/foo.test.ts)
+                    } else if test_dir.starts_with(&format!("{}/", src_dir)) {
+                        scored.push((source, 2));
+                    // Source dir is child of test dir parent
+                    } else if let Some(test_parent) = Path::new(test_dir.as_ref()).parent() {
+                        let tp = test_parent.to_string_lossy();
+                        if !tp.is_empty() && src_dir.starts_with(&format!("{}/", tp)) {
+                            scored.push((source, 3));
+                        }
+                    }
+                }
+
+                // If too many matches even after proximity filter, skip (ambiguous)
+                if scored.len() > 5 {
+                    continue;
+                }
+
+                for (source, score) in &scored {
+                    let weight = match score {
+                        0 => 1.0,
+                        1 => 0.9,
+                        2 => 0.8,
+                        _ => 0.6,
+                    };
                     relations.push(Relation {
                         source_id: f.id.clone(),
                         target_id: source.id.clone(),
                         kind: RelationKind::TestFor,
-                        weight: 1.0,
+                        weight,
                     });
                 }
             }
@@ -565,6 +505,8 @@ impl<'a> Indexer<'a> {
     }
 
     /// Detect config files and create ConfigFor relations to nearby source files.
+    /// Only links to files in the same directory (not recursive) to avoid explosion
+    /// on root-level configs like package.json or Cargo.toml.
     fn build_config_relations(files: &[FileEntry], relations: &mut Vec<Relation>) {
         let config_files: Vec<&FileEntry> = files
             .iter()
@@ -575,12 +517,16 @@ impl<'a> Indexer<'a> {
             return;
         }
 
-        // For each config file, link to source files in the same or parent directory
         for config in &config_files {
             let config_dir = Path::new(&config.path)
                 .parent()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
+
+            // Skip root-level configs — they relate to everything, which means nothing
+            if config_dir.is_empty() {
+                continue;
+            }
 
             for f in files {
                 if f.id == config.id || is_config_file(&f.path) {
@@ -591,9 +537,8 @@ impl<'a> Indexer<'a> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
 
-                // Same directory or config is in parent
-                if f_dir == config_dir || f_dir.starts_with(&format!("{}/", config_dir)) {
-                    // Only link to code files in same/child dir
+                // Same directory only — no recursive descent
+                if f_dir == config_dir {
                     let ext = Path::new(&f.path)
                         .extension()
                         .and_then(|e| e.to_str())
@@ -665,25 +610,75 @@ fn resolve_import<'a>(
         // Convert module path to file path: foo::bar → foo/bar
         let module_path = stripped.replace("::", "/");
 
-        // Try: module_path.rs, module_path/mod.rs, module_path/lib.rs
-        let candidates = [
-            format!("{}.rs", module_path),
-            format!("{}/mod.rs", module_path),
-            format!("{}/lib.rs", module_path),
-        ];
+        // For crate:: imports, try resolving relative to the crate's src/ directory
+        // Find the crate root by looking for the closest Cargo.toml-adjacent src/
+        let crate_prefix = if import_path.starts_with("crate") {
+            // Walk up from source_dir to find src/ boundary
+            let mut prefix = source_dir.to_string();
+            loop {
+                if prefix.ends_with("/src") || prefix == "src" {
+                    break;
+                }
+                if let Some((parent, _)) = prefix.rsplit_once('/') {
+                    prefix = parent.to_string();
+                } else {
+                    prefix = String::new();
+                    break;
+                }
+            }
+            if prefix.is_empty() { None } else { Some(format!("{}/", prefix)) }
+        } else {
+            None
+        };
 
-        // Use suffix index for O(1) lookup instead of scanning all paths
-        for candidate in &candidates {
-            if let Some(paths) = suffix_to_paths.get(candidate.as_str()) {
-                results.extend(paths.iter());
+        // For super::, resolve relative to parent directory
+        let super_prefix = if import_path.starts_with("super") {
+            Path::new(source_dir).parent()
+                .map(|p| format!("{}/", p.to_string_lossy()))
+        } else {
+            None
+        };
+
+        // For self::, resolve relative to current directory
+        let self_prefix = if import_path.starts_with("self") {
+            Some(format!("{}/", source_dir))
+        } else {
+            None
+        };
+
+        // Try with specific crate/super/self prefix first (high confidence)
+        for prefix in [crate_prefix, super_prefix, self_prefix].iter().flatten() {
+            let candidates = [
+                format!("{}{}.rs", prefix, module_path),
+                format!("{}{}/mod.rs", prefix, module_path),
+                format!("{}{}/lib.rs", prefix, module_path),
+            ];
+            for candidate in &candidates {
+                if let Some((&path, _)) = path_to_id.get_key_value(candidate.as_str()) {
+                    results.push(path);
+                }
             }
         }
 
-        // Also try matching the last segment as a stem
+        // Fallback: suffix-based lookup (lower confidence)
         if results.is_empty() {
-            let last_segment = stripped.rsplit("::").next().unwrap_or(stripped);
-            if let Some(paths) = stem_to_paths.get(last_segment) {
-                results.extend(paths.iter().take(2));
+            let candidates = [
+                format!("{}.rs", module_path),
+                format!("{}/mod.rs", module_path),
+                format!("{}/lib.rs", module_path),
+            ];
+            for candidate in &candidates {
+                if let Some(paths) = suffix_to_paths.get(candidate.as_str()) {
+                    // Only take results that are close to the source file
+                    for &path in paths.iter() {
+                        // Prefer same crate (shares a common prefix)
+                        let common = source_dir.chars().zip(path.chars())
+                            .take_while(|(a, b)| a == b).count();
+                        if common > 5 || paths.len() == 1 {
+                            results.push(path);
+                        }
+                    }
+                }
             }
         }
 
@@ -709,15 +704,31 @@ fn resolve_import<'a>(
     }
 
     // 4. Fallback: try matching the last segment as a file stem
+    // Only use stem fallback if the name is specific enough (>= 4 chars, not a common word)
     let last = import_path
         .rsplit(|c| c == '/' || c == ':' || c == '.')
         .next()
         .unwrap_or(import_path);
 
-    if !last.is_empty() && last.len() >= 2 {
+    if !last.is_empty() && last.len() >= 4 {
         if let Some(paths) = stem_to_paths.get(last) {
-            // Return at most 2 matches to avoid noise
-            results.extend(paths.iter().take(2));
+            if paths.len() == 1 {
+                // Unique stem match — high confidence
+                results.extend(paths.iter());
+            } else {
+                // Multiple matches — prefer ones close to source
+                for &path in paths.iter().take(3) {
+                    let common = source_dir.chars().zip(path.chars())
+                        .take_while(|(a, b)| a == b).count();
+                    if common > 5 {
+                        results.push(path);
+                    }
+                }
+                // If no proximity match, take first one only
+                if results.is_empty() {
+                    results.extend(paths.iter().take(1));
+                }
+            }
         }
     }
 
@@ -797,6 +808,16 @@ fn extract_test_base_stem(path: &str) -> String {
         return stem;
     }
     String::new()
+}
+
+/// Check if two directory paths share the same parent (are siblings).
+fn dirs_share_parent(a: &str, b: &str) -> bool {
+    let pa = Path::new(a).parent();
+    let pb = Path::new(b).parent();
+    match (pa, pb) {
+        (Some(pa), Some(pb)) => !pa.as_os_str().is_empty() && pa == pb,
+        _ => false,
+    }
 }
 
 /// Normalize a file path: resolve `.` and `..` components.
