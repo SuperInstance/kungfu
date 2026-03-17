@@ -22,10 +22,9 @@ Items:  3
 
 ## Install
 
-```sh
-# npm (all platforms)
-npm install -g kungfu-ai
+Recommended — single binary, no dependencies:
 
+```sh
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.sh | sh
 
@@ -33,9 +32,11 @@ curl -fsSL https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.s
 irm https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.ps1 | iex
 ```
 
-Supports macOS (ARM64, x86_64), Linux (x86_64), and Windows (x86_64).
+Also available via npm (`npm install -g kungfu-ai`), but the script above is faster — it downloads a single prebuilt binary without Node.js overhead.
 
-Or build from source:
+Supports macOS (ARM64, x86_64), Linux (ARM64, x86_64), and Windows (x86_64).
+
+Build from source:
 
 ```sh
 git clone https://github.com/denyzhirkov/kungfu.git
