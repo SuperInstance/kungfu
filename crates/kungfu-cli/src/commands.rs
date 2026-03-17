@@ -1363,7 +1363,25 @@ pub fn investigate(query: &str, budget: Budget, json: bool) -> Result<()> {
 pub fn mcp() -> Result<()> {
     let cwd = env::current_dir()?;
     let root = kungfu_project::find_project_root(&cwd)?;
-    let _ = KungfuService::open(&cwd)?;
+
+    // Auto-init if not initialized
+    if !root.join(".kungfu").exists() {
+        eprintln!("kungfu: auto-initializing project...");
+        kungfu_project::init_project(&root)?;
+    }
+
+    // Auto-index if index is empty or missing
+    let service = KungfuService::open(&cwd)?;
+    let index_dir = root.join(".kungfu").join("index");
+    let needs_index = !index_dir.join("symbols.json").exists()
+        || std::fs::metadata(index_dir.join("symbols.json"))
+            .map(|m| m.len() < 10)
+            .unwrap_or(true);
+    if needs_index {
+        eprintln!("kungfu: auto-indexing project...");
+        let stats = service.index_full()?;
+        eprintln!("kungfu: indexed {} files ({} symbols)", stats.total_files, stats.symbols_extracted);
+    }
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(kungfu_mcp::run_stdio_server(root))?;
