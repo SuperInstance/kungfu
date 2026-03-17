@@ -316,46 +316,59 @@ impl<'a> SearchEngine<'a> {
 fn score_symbol_match(name: &str, query: &str) -> f64 {
     let name_lower = name.to_lowercase();
 
+    // Exact match
     if name_lower == *query {
         return 1.0;
     }
+    // Prefix match
     if name_lower.starts_with(query) {
         return 0.9;
     }
+    // Substring match — scale by how much of the name the query covers
     if name_lower.contains(query) {
-        return 0.7;
+        let coverage = query.len() as f64 / name_lower.len() as f64;
+        // "find" in "find_symbol" (0.36) → 0.55; "find" in "find_files" (0.4) → 0.58
+        // "symbol" in "find_symbol" (0.54) → 0.67; short queries get lower scores
+        return 0.4 + coverage * 0.4;
     }
 
     // Stem match: "ranking" matches "rank"
     if let Some(stem) = simple_stem(query) {
         if name_lower.contains(&stem) {
-            return 0.6;
+            let coverage = stem.len() as f64 / name_lower.len() as f64;
+            return 0.35 + coverage * 0.3;
         }
     }
     // Short root: "authentication" → "auth" matches "useAuthStore"
     if let Some(root) = short_root(query) {
         if name_lower.contains(&root) {
-            return 0.5;
+            return 0.4;
         }
     }
     // Reverse: query "rank" matches name "ranking"
     if let Some(stem) = simple_stem(&name_lower) {
+        if stem == *query {
+            return 0.55;
+        }
         if stem.contains(query) || query.contains(&stem) {
-            return 0.5;
+            return 0.4;
         }
     }
 
-    // Fuzzy: check if all query chars appear in order
-    let mut query_chars = query.chars().peekable();
-    for ch in name_lower.chars() {
-        if let Some(&qch) = query_chars.peek() {
-            if ch == qch {
-                query_chars.next();
+    // Fuzzy: check if all query chars appear in order — only for longer queries
+    if query.len() >= 4 {
+        let mut query_chars = query.chars().peekable();
+        for ch in name_lower.chars() {
+            if let Some(&qch) = query_chars.peek() {
+                if ch == qch {
+                    query_chars.next();
+                }
             }
         }
-    }
-    if query_chars.peek().is_none() && query.len() >= 3 {
-        return 0.4;
+        if query_chars.peek().is_none() {
+            let coverage = query.len() as f64 / name_lower.len() as f64;
+            return 0.2 + coverage * 0.2;
+        }
     }
 
     0.0
@@ -691,8 +704,12 @@ mod tests {
 
     #[test]
     fn fuzzy_match() {
+        // 3-char fuzzy queries are intentionally filtered out (too noisy)
         let score = score_symbol_match("build_context_packet", "bcp");
-        assert!(score > 0.3, "fuzzy match should score > 0.3, got {}", score);
+        assert_eq!(score, 0.0, "3-char fuzzy should not match");
+        // 4+ char fuzzy queries should still work
+        let score = score_symbol_match("build_context_packet", "bcpk");
+        assert!(score > 0.2, "4-char fuzzy match should score > 0.2, got {}", score);
     }
 
     #[test]

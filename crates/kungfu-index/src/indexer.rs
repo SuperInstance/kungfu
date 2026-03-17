@@ -443,8 +443,13 @@ impl<'a> Indexer<'a> {
 
     /// Resolve extracted calls into Calls relations by matching callee names to known symbols.
     fn build_call_relations(symbols: &[Symbol], calls: &[RawCall], relations: &mut Vec<Relation>) {
-        // Build name → symbol IDs lookup (only functions/methods/classes)
-        let mut name_to_ids: HashMap<&str, Vec<&str>> = HashMap::new();
+        // Build name → symbol info lookup (only functions/methods/classes)
+        struct SymInfo<'a> {
+            id: &'a str,
+            file_id: &'a str,
+            path: &'a str,
+        }
+        let mut name_to_syms: HashMap<&str, Vec<SymInfo>> = HashMap::new();
         for sym in symbols {
             if matches!(
                 sym.kind,
@@ -453,22 +458,69 @@ impl<'a> Indexer<'a> {
                     | kungfu_types::symbol::SymbolKind::Class
                     | kungfu_types::symbol::SymbolKind::Struct
             ) {
-                name_to_ids.entry(sym.name.as_str()).or_default().push(&sym.id);
+                name_to_syms.entry(sym.name.as_str()).or_default().push(SymInfo {
+                    id: &sym.id,
+                    file_id: &sym.file_id,
+                    path: &sym.path,
+                });
             }
         }
 
-        // Resolve each call
+        // Build caller_id → file_id/path lookup
+        let caller_info: HashMap<&str, (&str, &str)> = symbols.iter()
+            .map(|s| (s.id.as_str(), (s.file_id.as_str(), s.path.as_str())))
+            .collect();
+
+        // Resolve each call with scoping: same-file > same-dir > cross-project
         for call in calls {
-            if let Some(target_ids) = name_to_ids.get(call.callee_name.as_str()) {
-                for &target_id in target_ids {
-                    if target_id != call.caller_id {
-                        relations.push(Relation {
-                            source_id: call.caller_id.clone(),
-                            target_id: target_id.to_string(),
-                            kind: RelationKind::Calls,
-                            weight: 1.0,
-                        });
+            if let Some(targets) = name_to_syms.get(call.callee_name.as_str()) {
+                let (caller_file_id, caller_path) = caller_info.get(call.caller_id.as_str())
+                    .copied()
+                    .unwrap_or(("", ""));
+                let caller_dir = caller_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+
+                // Partition targets by proximity
+                let mut same_file: Vec<&SymInfo> = Vec::new();
+                let mut same_dir: Vec<&SymInfo> = Vec::new();
+                let mut other: Vec<&SymInfo> = Vec::new();
+
+                for target in targets {
+                    if target.id == call.caller_id {
+                        continue; // skip self-calls
                     }
+                    if target.file_id == caller_file_id {
+                        same_file.push(target);
+                    } else {
+                        let target_dir = target.path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+                        if target_dir == caller_dir && !caller_dir.is_empty() {
+                            same_dir.push(target);
+                        } else {
+                            other.push(target);
+                        }
+                    }
+                }
+
+                // Use most specific match: same_file > same_dir > other
+                // Only fall through if no matches at higher specificity
+                let (chosen, weight) = if !same_file.is_empty() {
+                    (same_file, 1.0)
+                } else if !same_dir.is_empty() {
+                    (same_dir, 0.8)
+                } else if other.len() <= 2 {
+                    // Only resolve cross-dir calls if target name is unique enough
+                    (other, 0.5)
+                } else {
+                    // Too many candidates — ambiguous, skip
+                    continue;
+                };
+
+                for target in chosen {
+                    relations.push(Relation {
+                        source_id: call.caller_id.clone(),
+                        target_id: target.id.to_string(),
+                        kind: RelationKind::Calls,
+                        weight: weight as f32,
+                    });
                 }
             }
         }

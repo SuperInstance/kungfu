@@ -1681,10 +1681,11 @@ impl KungfuService {
         }).collect();
 
         // Build reverse dependency graph: target_id → source_ids (Calls + Imports)
+        // Only include high-confidence relations (weight >= 0.7) to avoid false positives
         let mut reverse_deps: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
         for r in &relations {
             match r.kind {
-                RelationKind::Calls => {
+                RelationKind::Calls if r.weight >= 0.7 => {
                     reverse_deps.entry(r.target_id.as_str()).or_default().push((r.source_id.as_str(), "calls"));
                 }
                 RelationKind::Imports => {
@@ -2027,7 +2028,13 @@ impl KungfuService {
         let mut fan_out: HashMap<String, usize> = HashMap::new();
 
         for r in &relations {
-            // Count all structural relations (imports, calls, config_for, test_for)
+            // Only count high-confidence structural relations
+            let dominated = matches!(r.kind,
+                RelationKind::Imports | RelationKind::ConfigFor | RelationKind::TestFor
+            ) || (r.kind == RelationKind::Calls && r.weight >= 0.7);
+            if !dominated {
+                continue;
+            }
             let source_file = id_to_path.get(r.source_id.as_str()).copied().unwrap_or("");
             let target_file = id_to_path.get(r.target_id.as_str()).copied().unwrap_or("");
             if !source_file.is_empty() && !target_file.is_empty() && source_file != target_file {
