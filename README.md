@@ -32,8 +32,6 @@ curl -fsSL https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.s
 irm https://raw.githubusercontent.com/denyzhirkov/kungfu/master/install.ps1 | iex
 ```
 
-Also available via npm (`npm install -g kungfu-ai`), but the script above is faster — it downloads a single prebuilt binary without Node.js overhead.
-
 Supports macOS (ARM64, x86_64), Linux (ARM64, x86_64), and Windows (x86_64).
 
 Build from source:
