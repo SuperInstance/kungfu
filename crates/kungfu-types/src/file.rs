@@ -22,6 +22,9 @@ pub enum Language {
     JavaScript,
     Python,
     Go,
+    Java,
+    CSharp,
+    Kotlin,
     Json,
     Yaml,
     Markdown,
@@ -37,6 +40,9 @@ impl Language {
             "js" | "jsx" | "mjs" | "cjs" => Language::JavaScript,
             "py" | "pyi" => Language::Python,
             "go" => Language::Go,
+            "java" => Language::Java,
+            "cs" => Language::CSharp,
+            "kt" | "kts" => Language::Kotlin,
             "json" => Language::Json,
             "yaml" | "yml" => Language::Yaml,
             "md" | "mdx" => Language::Markdown,
@@ -53,6 +59,9 @@ impl Language {
                 | Language::JavaScript
                 | Language::Python
                 | Language::Go
+                | Language::Java
+                | Language::CSharp
+                | Language::Kotlin
         )
     }
 }
@@ -65,6 +74,9 @@ impl std::fmt::Display for Language {
             Language::JavaScript => write!(f, "javascript"),
             Language::Python => write!(f, "python"),
             Language::Go => write!(f, "go"),
+            Language::Java => write!(f, "java"),
+            Language::CSharp => write!(f, "csharp"),
+            Language::Kotlin => write!(f, "kotlin"),
             Language::Json => write!(f, "json"),
             Language::Yaml => write!(f, "yaml"),
             Language::Markdown => write!(f, "markdown"),

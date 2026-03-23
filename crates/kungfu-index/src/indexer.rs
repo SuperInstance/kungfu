@@ -361,6 +361,7 @@ impl<'a> Indexer<'a> {
         let mut stem_to_paths: HashMap<String, Vec<&str>> = HashMap::new();
         // Suffix lookup: "foo/bar.rs" → ["src/foo/bar.rs", "lib/foo/bar.rs", ...]
         let mut suffix_to_paths: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut dir_suffix_to_paths: HashMap<&str, Vec<&str>> = HashMap::new();
         for f in files {
             let p = Path::new(&f.path);
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
@@ -379,6 +380,20 @@ impl<'a> Indexer<'a> {
             }
             // Also index the full path itself
             suffix_to_paths.entry(path_str).or_default().push(path_str);
+
+            // Index directory suffixes for JVM/C# package resolution
+            // e.g. path "ktor-server/common/src/io/ktor/server/routing/RoutingNode.kt"
+            // → dir suffix "io/ktor/server/routing" maps to the full path
+            if let Some(parent) = Path::new(path_str).parent().and_then(|p| p.to_str()) {
+                let mut dpos = 0;
+                while let Some(slash) = parent[dpos..].find('/') {
+                    let dir_suffix = &parent[dpos + slash + 1..];
+                    if !dir_suffix.is_empty() {
+                        dir_suffix_to_paths.entry(dir_suffix).or_default().push(path_str);
+                    }
+                    dpos += slash + 1;
+                }
+            }
         }
 
         for (source_path, imports) in file_imports {
@@ -392,7 +407,7 @@ impl<'a> Indexer<'a> {
                 .to_string_lossy();
 
             for imp in imports {
-                let resolved = resolve_import(&imp.path, &source_dir, &path_to_id, &stem_to_paths, &suffix_to_paths);
+                let resolved = resolve_import(&imp.path, &source_dir, &path_to_id, &stem_to_paths, &suffix_to_paths, &dir_suffix_to_paths);
                 for target_path in resolved {
                     if let Some(&target_id) = path_to_id.get(target_path) {
                         if target_id != source_id {
@@ -564,6 +579,7 @@ fn resolve_import<'a>(
     path_to_id: &HashMap<&'a str, &str>,
     stem_to_paths: &HashMap<String, Vec<&'a str>>,
     suffix_to_paths: &HashMap<&'a str, Vec<&'a str>>,
+    dir_suffix_to_paths: &HashMap<&'a str, Vec<&'a str>>,
 ) -> Vec<&'a str> {
     let mut results = Vec::new();
 
@@ -685,12 +701,16 @@ fn resolve_import<'a>(
         return results;
     }
 
-    // 3. Python dotted imports: foo.bar.baz → foo/bar/baz.py
+    // 3. Dotted imports: Python, Java, Kotlin, C#
+    //    foo.bar.baz → foo/bar/baz.py | .java | .kt | .cs
     if import_path.contains('.') && !import_path.contains('/') {
         let file_path = import_path.replace('.', "/");
         let candidates = [
             format!("{}.py", file_path),
             format!("{}/__init__.py", file_path),
+            format!("{}.java", file_path),
+            format!("{}.kt", file_path),
+            format!("{}.cs", file_path),
         ];
         // Use suffix index for O(1) lookup
         for candidate in &candidates {
@@ -700,6 +720,35 @@ fn resolve_import<'a>(
         }
         if !results.is_empty() {
             return results;
+        }
+
+        // 3b. JVM/C# package-directory resolution
+        // import io.ktor.server.routing.Routing → package dir "io/ktor/server/routing"
+        // Class name may not match filename, so find all files in the package directory
+        let segments: Vec<&str> = import_path.split('.').collect();
+        if segments.len() >= 2 {
+            // Last segment is class/function name, rest is package
+            let pkg_dir = segments[..segments.len() - 1].join("/");
+            if let Some(paths) = dir_suffix_to_paths.get(pkg_dir.as_str()) {
+                // Only take code files (not resources)
+                for &path in paths.iter().take(5) {
+                    results.push(path);
+                }
+            }
+            if !results.is_empty() {
+                return results;
+            }
+
+            // Also try wildcard: import io.ktor.server.routing.* (path already stripped of .*)
+            // In this case file_path IS the directory
+            if let Some(paths) = dir_suffix_to_paths.get(file_path.as_str()) {
+                for &path in paths.iter().take(5) {
+                    results.push(path);
+                }
+            }
+            if !results.is_empty() {
+                return results;
+            }
         }
     }
 
@@ -767,6 +816,12 @@ fn is_config_file(path: &str) -> bool {
             | "setup.cfg"
             | "go.mod"
             | "go.sum"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "settings.gradle"
+            | "settings.gradle.kts"
+            | "pom.xml"
+            | "gradle.properties"
             | "makefile"
             | "dockerfile"
             | "docker-compose.yml"
@@ -776,6 +831,8 @@ fn is_config_file(path: &str) -> bool {
     ) || lower.ends_with(".config.js")
         || lower.ends_with(".config.ts")
         || lower.ends_with(".config.mjs")
+        || lower.ends_with(".csproj")
+        || lower.ends_with(".sln")
 }
 
 fn extract_stem(path: &str) -> String {

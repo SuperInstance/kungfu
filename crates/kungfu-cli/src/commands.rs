@@ -202,7 +202,7 @@ pub fn doctor(json: bool) -> Result<()> {
                         .iter()
                         .filter(|f| {
                             let lang = f.get("language").and_then(|l| l.as_str()).unwrap_or("");
-                            if !matches!(lang, "rust" | "typescript" | "javascript" | "python" | "go") {
+                            if !matches!(lang, "rust" | "typescript" | "javascript" | "python" | "go" | "java" | "csharp" | "kotlin") {
                                 return false;
                             }
                             // Exclude tiny files and test fixtures from coverage
@@ -263,7 +263,7 @@ pub fn doctor(json: bool) -> Result<()> {
     checks.push((
         "parsers",
         true,
-        "rust, typescript, javascript, python, go".into(),
+        "rust, typescript, javascript, python, go, java, csharp, kotlin".into(),
     ));
 
     if json {
