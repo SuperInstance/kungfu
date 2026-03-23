@@ -189,32 +189,37 @@ Add to your agent config (Claude Code, Cursor, etc.):
 
 ## Agent rules
 
-Add to `CLAUDE.md` or system prompt of your project. Pick the variant that fits your setup:
+Add to `CLAUDE.md` or system prompt of your project:
 
-### With MCP (recommended)
+### MCP (recommended)
 
 ```markdown
 ## Context retrieval
 - Before reading files, use `kungfu` MCP tools to understand the codebase.
 - Use `ask_context` with the task description to get a ranked context packet.
 - Use `find_symbol` / `get_symbol` to locate code by name instead of reading whole files.
+- Use `explore_symbol` for a complete picture: definition + related symbols + snippet in one call.
 - Use `file_outline` before reading a file — often the outline is enough.
-- Only read full files when the above tools confirm you need them.
+- Use `onboard` when first encountering a project for architecture overview.
 - After git changes, use `diff_context` to focus on what changed.
+- Use `investigate` for complex tasks — combines ask_context + diff awareness.
+- Use `affected` before refactoring to check blast radius.
+- Use `smart_test` to find which tests to run after changes.
+- Only read full files when the above tools confirm you need them.
 - Prefer tiny/small budget. Escalate to medium/full only when needed.
 ```
 
-### Without MCP (CLI via Bash)
-
-If MCP is unavailable (corporate restrictions, unsupported IDE), use CLI:
+### CLI (alternative)
 
 ```markdown
 ## Context retrieval
-- Before reading files, run `kungfu ask-context "<task>" --budget small --json` via Bash.
-- Use `kungfu find-symbol <name> --json` to locate code by name instead of reading whole files.
-- Use `kungfu file-outline <path> --json` before reading a file — often the outline is enough.
+- Before reading files, run `kungfu ask-context "<task>" --budget small` via Bash.
+- Use `kungfu find-symbol <name>` to locate code by name instead of reading whole files.
+- Use `kungfu file-outline <path>` before reading a file — often the outline is enough.
+- Use `kungfu onboard` when first encountering a project.
+- After git changes, run `kungfu diff-context` to focus on what changed.
+- Use `kungfu affected <symbol>` before refactoring to check blast radius.
 - Only read full files when kungfu output confirms you need them.
-- After git changes, run `kungfu diff-context --json` to focus on what changed.
 - Prefer tiny/small budget. Escalate to medium/full only when needed.
 ```
 
