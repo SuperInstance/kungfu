@@ -5,6 +5,8 @@ pub mod go_parser;
 pub mod java_parser;
 pub mod csharp_parser;
 pub mod kotlin_parser;
+pub mod c_parser;
+pub mod cpp_parser;
 
 use anyhow::{bail, Result};
 use kungfu_types::file::Language;
@@ -63,6 +65,8 @@ impl Parser {
             Language::Java => tree_sitter_java::LANGUAGE.into(),
             Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
             Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+            Language::C => tree_sitter_c::LANGUAGE.into(),
+            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
             _ => bail!("no parser for language: {}", language),
         };
 
@@ -103,6 +107,14 @@ impl Parser {
             Language::Kotlin => (
                 kotlin_parser::extract(root, source, file_id, file_path),
                 kotlin_parser::extract_imports(root, source),
+            ),
+            Language::C => (
+                c_parser::extract(root, source, file_id, file_path),
+                c_parser::extract_imports(root, source),
+            ),
+            Language::Cpp => (
+                cpp_parser::extract(root, source, file_id, file_path),
+                cpp_parser::extract_imports(root, source),
             ),
             _ => (Vec::new(), Vec::new()),
         };

@@ -2300,7 +2300,7 @@ fn detect_primary_language(files: &[FileEntry]) -> Option<String> {
 fn is_code_language(lang: &str) -> bool {
     matches!(
         lang,
-        "rust" | "typescript" | "javascript" | "python" | "go"
+        "rust" | "typescript" | "javascript" | "python" | "go" | "java" | "csharp" | "kotlin" | "c" | "cpp"
     )
 }
 

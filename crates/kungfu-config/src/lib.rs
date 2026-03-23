@@ -81,6 +81,8 @@ fn default_languages() -> Vec<String> {
         "java".into(),
         "csharp".into(),
         "kotlin".into(),
+        "c".into(),
+        "cpp".into(),
         "json".into(),
         "markdown".into(),
         "yaml".into(),

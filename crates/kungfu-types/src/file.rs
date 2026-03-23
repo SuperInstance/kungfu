@@ -25,6 +25,8 @@ pub enum Language {
     Java,
     CSharp,
     Kotlin,
+    C,
+    Cpp,
     Json,
     Yaml,
     Markdown,
@@ -43,6 +45,9 @@ impl Language {
             "java" => Language::Java,
             "cs" => Language::CSharp,
             "kt" | "kts" => Language::Kotlin,
+            "c" => Language::C,
+            "cpp" | "cc" | "cxx" | "c++" => Language::Cpp,
+            "h" | "hpp" | "hxx" | "hh" => Language::Cpp,
             "json" => Language::Json,
             "yaml" | "yml" => Language::Yaml,
             "md" | "mdx" => Language::Markdown,
@@ -62,6 +67,8 @@ impl Language {
                 | Language::Java
                 | Language::CSharp
                 | Language::Kotlin
+                | Language::C
+                | Language::Cpp
         )
     }
 }
@@ -77,6 +84,8 @@ impl std::fmt::Display for Language {
             Language::Java => write!(f, "java"),
             Language::CSharp => write!(f, "csharp"),
             Language::Kotlin => write!(f, "kotlin"),
+            Language::C => write!(f, "c"),
+            Language::Cpp => write!(f, "cpp"),
             Language::Json => write!(f, "json"),
             Language::Yaml => write!(f, "yaml"),
             Language::Markdown => write!(f, "markdown"),
