@@ -513,6 +513,10 @@ fn short_root(word: &str) -> Option<String> {
     if chars.len() < 8 {
         return None;
     }
+    // Skip compound identifiers — they already have meaningful parts
+    if word.contains('_') || word.contains('-') {
+        return None;
+    }
     // Only for ASCII words (avoids UTF-8 boundary issues)
     if !word.is_ascii() {
         return None;

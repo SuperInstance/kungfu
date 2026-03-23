@@ -13,6 +13,81 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tracing::info;
 
+/// Tunable weights for ask-context strategy scoring.
+/// All values are multipliers or bonuses applied during context selection.
+pub struct StrategyWeights {
+    /// Strategy B: score multiplier for symbols found via file-text search
+    pub file_symbol_score: f64,
+    /// Strategy B2: flat score for grep content matches
+    pub grep_content_score: f64,
+    /// Strategy B3: score multiplier for semantic expansion matches
+    pub semantic_score: f64,
+    /// Strategy B3: minimum symbol score threshold
+    pub semantic_min_score: f64,
+    /// Strategy C: sibling score multiplier when keyword-relevant
+    pub sibling_relevant_score: f64,
+    /// Strategy C: sibling score multiplier when keyword-irrelevant
+    pub sibling_irrelevant_score: f64,
+    /// Strategy D: score multiplier for related file symbols
+    pub related_score: f64,
+    /// Bonus: test file proximity
+    pub test_bonus: f64,
+    /// Bonus: config file proximity
+    pub config_bonus: f64,
+    /// Bonus: debug-relevant symbol names
+    pub debug_bonus: f64,
+    /// Bonus: path/directory keyword match
+    pub path_match_bonus: f64,
+    /// Bonus: recently changed files
+    pub changed_file_bonus: f64,
+    /// Secondary code language penalty multiplier
+    pub secondary_lang_penalty: f64,
+}
+
+impl Default for StrategyWeights {
+    fn default() -> Self {
+        Self {
+            file_symbol_score: 0.9,
+            grep_content_score: 0.45,
+            semantic_score: 0.5,
+            semantic_min_score: 0.5,
+            sibling_relevant_score: 0.9,
+            sibling_irrelevant_score: 0.3,
+            related_score: 0.4,
+            test_bonus: 0.15,
+            config_bonus: 0.15,
+            debug_bonus: 0.1,
+            path_match_bonus: 0.05,
+            changed_file_bonus: 0.3,
+            secondary_lang_penalty: 0.85,
+        }
+    }
+}
+
+impl StrategyWeights {
+    /// Load weights from environment variables (KUNGFU_W_*), falling back to defaults.
+    pub fn from_env() -> Self {
+        let mut w = Self::default();
+        fn env_f64(key: &str, default: f64) -> f64 {
+            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+        }
+        w.file_symbol_score = env_f64("KUNGFU_W_FILE_SYMBOL", w.file_symbol_score);
+        w.grep_content_score = env_f64("KUNGFU_W_GREP", w.grep_content_score);
+        w.semantic_score = env_f64("KUNGFU_W_SEMANTIC", w.semantic_score);
+        w.semantic_min_score = env_f64("KUNGFU_W_SEMANTIC_MIN", w.semantic_min_score);
+        w.sibling_relevant_score = env_f64("KUNGFU_W_SIBLING_REL", w.sibling_relevant_score);
+        w.sibling_irrelevant_score = env_f64("KUNGFU_W_SIBLING_IRREL", w.sibling_irrelevant_score);
+        w.related_score = env_f64("KUNGFU_W_RELATED", w.related_score);
+        w.test_bonus = env_f64("KUNGFU_W_TEST", w.test_bonus);
+        w.config_bonus = env_f64("KUNGFU_W_CONFIG", w.config_bonus);
+        w.debug_bonus = env_f64("KUNGFU_W_DEBUG", w.debug_bonus);
+        w.path_match_bonus = env_f64("KUNGFU_W_PATH", w.path_match_bonus);
+        w.changed_file_bonus = env_f64("KUNGFU_W_CHANGED", w.changed_file_bonus);
+        w.secondary_lang_penalty = env_f64("KUNGFU_W_LANG_PENALTY", w.secondary_lang_penalty);
+        w
+    }
+}
+
 pub struct KungfuService {
     project: Project,
     store: JsonStore,
@@ -469,6 +544,10 @@ impl KungfuService {
     /// High-level context retrieval: parse intent, run multi-strategy search,
     /// rank with contextual signals, return compact packet.
     pub fn ask_context(&self, task: &str, budget: Budget) -> Result<ContextPacket> {
+        self.ask_context_with_weights(task, budget, &StrategyWeights::from_env())
+    }
+
+    pub fn ask_context_with_weights(&self, task: &str, budget: Budget, w: &StrategyWeights) -> Result<ContextPacket> {
         let budget = self.resolve_budget(budget);
         let query_lower = task.to_lowercase();
         let words: Vec<&str> = query_lower.split_whitespace().collect();
@@ -526,7 +605,7 @@ impl KungfuService {
                 seen_ids.insert(sym.id.clone());
                 scored_symbols.push(ScoredSymbol {
                     symbol: sym.clone(),
-                    score: fr.score * 0.7,
+                    score: fr.score * w.file_symbol_score,
                     reason: format!("in matched file {}", fr.item.path),
                 });
             }
@@ -539,7 +618,7 @@ impl KungfuService {
                 seen_ids.insert(sym.id.clone());
                 scored_symbols.push(ScoredSymbol {
                     symbol: sym,
-                    score: 0.45,
+                    score: w.grep_content_score,
                     reason: format!("content match: {}", matched_line),
                 });
             }
@@ -563,11 +642,11 @@ impl KungfuService {
                         continue;
                     }
                     // Lower score for semantic matches — they're conceptual, not exact
-                    if r.score >= 0.5 {
+                    if r.score >= w.semantic_min_score {
                         seen_ids.insert(r.item.id.clone());
                         scored_symbols.push(ScoredSymbol {
                             symbol: r.item,
-                            score: r.score * 0.5,
+                            score: r.score * w.semantic_score,
                             reason: "semantic match (related concept)".to_string(),
                         });
                     }
@@ -612,9 +691,9 @@ impl KungfuService {
                     }
                     seen_ids.insert(sym.id.clone());
                     let score = if *relevance > 0 {
-                        top_score * 0.9
+                        top_score * w.sibling_relevant_score
                     } else {
-                        top_score * 0.3
+                        top_score * w.sibling_irrelevant_score
                     };
                     scored_symbols.push(ScoredSymbol {
                         symbol: (*sym).clone(),
@@ -635,8 +714,8 @@ impl KungfuService {
                         let is_relevant = keywords
                             .iter()
                             .any(|kw| name_lower.contains(*kw) || sig_lower.contains(*kw));
-                        if is_relevant && s.score < top_score * 0.9 {
-                            s.score = top_score * 0.9;
+                        if is_relevant && s.score < top_score * w.sibling_relevant_score {
+                            s.score = top_score * w.sibling_relevant_score;
                             s.reason = "same file as matched symbol".to_string();
                         }
                     }
@@ -658,7 +737,7 @@ impl KungfuService {
                         seen_ids.insert(sym.id.clone());
                         scored_symbols.push(ScoredSymbol {
                             symbol: sym.clone(),
-                            score: r.score * 0.4,
+                            score: r.score * w.related_score,
                             reason: format!("related to {}", top_file.path),
                         });
                     }
@@ -700,7 +779,7 @@ impl KungfuService {
                     || s.symbol.path.contains("spec")
                     || s.symbol.path.contains("tests/"))
             {
-                s.score += 0.15;
+                s.score += w.test_bonus;
             }
             if wants_config
                 && (s.symbol.path.ends_with(".toml")
@@ -708,7 +787,7 @@ impl KungfuService {
                     || s.symbol.path.ends_with(".yaml")
                     || s.symbol.path.contains("config"))
             {
-                s.score += 0.15;
+                s.score += w.config_bonus;
             }
             if intent == Intent::Debug {
                 let name_lower = s.symbol.name.to_lowercase();
@@ -717,7 +796,7 @@ impl KungfuService {
                     || name_lower.contains("handle")
                     || name_lower.contains("validate")
                 {
-                    s.score += 0.1;
+                    s.score += w.debug_bonus;
                 }
             }
         }
@@ -733,7 +812,7 @@ impl KungfuService {
                 })
             });
             if path_match {
-                s.score += 0.15;
+                s.score += w.path_match_bonus;
                 if !s.reason.contains("path match") {
                     s.reason = format!("{}, path match", s.reason);
                 }
@@ -772,7 +851,7 @@ impl KungfuService {
                     // Primary language: no change (×1.0)
                 } else if is_code_language(sym_lang) {
                     // Secondary code language: slight penalty
-                    s.score *= 0.85;
+                    s.score *= w.secondary_lang_penalty;
                 }
             }
         }
@@ -789,7 +868,7 @@ impl KungfuService {
                 if changed.iter().any(|c| {
                     s.symbol.path.ends_with(c) || c.ends_with(&s.symbol.path)
                 }) {
-                    s.score += 0.2;
+                    s.score += w.changed_file_bonus;
                     s.reason = format!("{}, recently changed", s.reason);
                 }
             }
