@@ -114,7 +114,7 @@ The highest-value command. Given a task description, it:
 
 1. **Detects intent** — lookup, debug, understand, or impact
 2. **Runs multiple search strategies** — symbol search, text search, related files, import chains
-3. **Applies contextual bonuses** — changed files (+0.2), test/config proximity (+0.15), language weighting
+3. **Applies contextual bonuses** — changed files (+0.3), test/config proximity (+0.15), language weighting, [tunable weights](#tuning)
 4. **Returns a ranked packet** with signatures and code snippets
 
 ### Intent detection
@@ -296,7 +296,7 @@ Agent immediately knows where to look. Then reads only the relevant file.
 
 ### Indexing
 - Scans project files respecting `.gitignore` and configurable ignore rules
-- Parses code with [tree-sitter](https://tree-sitter.github.io/) — Rust, TypeScript, JavaScript, Python, Go
+- Parses code with [tree-sitter](https://tree-sitter.github.io/) — Rust, TypeScript, JavaScript, Python, Go, Java, C#, Kotlin
 - Extracts symbols: functions, classes, structs, methods, traits, interfaces, types, constants
 - Extracts imports from AST and resolves them to actual files in the project
 - Builds relations: `imports`, `test_for`, `config_for`, `calls`
@@ -340,7 +340,7 @@ project_name = "my-project"
 paths = ["node_modules", "dist", "build", ".git", "target"]
 
 [languages]
-enabled = ["typescript", "javascript", "rust", "go", "python", "json", "markdown", "yaml", "toml"]
+enabled = ["typescript", "javascript", "rust", "go", "python", "java", "csharp", "kotlin", "json", "markdown", "yaml", "toml"]
 
 [search]
 default_budget = "small"
