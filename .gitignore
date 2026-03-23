@@ -34,3 +34,8 @@ CLAUDE.md
 
 # Benchmark repos
 /kungfu-bench
+# AutoResearch (internal)
+research/
+scripts/
+prompts/
+kungfu_autoresearch_prompt.md

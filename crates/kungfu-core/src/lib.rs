@@ -606,12 +606,15 @@ impl KungfuService {
                 // Impact/understand: allow more siblings since we want the full picture
                 let max_siblings = if intent == Intent::Impact { 5 } else { 3 };
                 for (sym, relevance) in siblings.iter().take(max_siblings) {
+                    // Skip keyword-irrelevant siblings for non-Impact intents
+                    if *relevance == 0 && intent != Intent::Impact {
+                        continue;
+                    }
                     seen_ids.insert(sym.id.clone());
-                    // Relevant siblings score close to the match; irrelevant ones much lower
                     let score = if *relevance > 0 {
                         top_score * 0.9
                     } else {
-                        top_score * 0.4
+                        top_score * 0.3
                     };
                     scored_symbols.push(ScoredSymbol {
                         symbol: (*sym).clone(),
